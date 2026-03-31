@@ -1,15 +1,11 @@
 from Sensores import Sensores
 
 class Camara(Sensores):
-    def __init__ (self,Sensor_id, Tipo_sensor, Interseccion, Timespant, Broker_puerto,Volumen,Velocidad_promedio):
-
-        super().__init__(Sensor_id, Tipo_sensor, Interseccion, Timespant, Broker_puerto)
-
+    def __init__(self, Sensor_id, Interseccion, Timespant, Broker_puerto, Volumen, Velocidad_promedio):
+        super().__init__(Sensor_id, None, Interseccion, Timespant, Broker_puerto)
         self.Volumen = Volumen
         self.Velocidad_promedio = Velocidad_promedio
+        self.set_Tipo_sensor("Camara")
 
-    def Asignar_Tipo_sensor(self):
-        self.Tipo_sensor = "Camara"
-
-    def Generar_id(self,M,N,i):
-        self.Sensor_id = f"CAM{i} C{M}{N}"
+    def Generar_id(self, M, N):
+        self.set_Sensor_id(f"CAM-C{M}{N}")
