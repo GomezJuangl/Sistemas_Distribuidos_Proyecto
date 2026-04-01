@@ -8,7 +8,7 @@ class Semaforo:
     def __init__(self, interseccion_id, fase_inicial="H_GREEN", duracion_normal=15, offset_inicial=0):
         self.interseccion_id = interseccion_id
         self.duracion_normal = duracion_normal
-        self.lock = threading.Lock()
+        self.lock = threading.Lock() 
 
         self.modo_prioridad = False
         self.direccion_prioritaria = None  # "H" o "V"
@@ -16,7 +16,7 @@ class Semaforo:
         self.fase_actual = fase_inicial
         self.luz_horizontal = "ROJO"
         self.luz_vertical = "ROJO"
-        self._aplicar_fase(self.fase_actual)
+        self._aplicar_fase(self.fase_actual) 
 
         # Desfase inicial para que no cambien todos al mismo tiempo
         self.tiempo_restante = max(1, self.duracion_normal - offset_inicial)
@@ -31,10 +31,7 @@ class Semaforo:
             self.luz_vertical = "VERDE"
 
     def tick(self, segundos=1):
-        """
-        Avanza el reloj interno del semáforo.
-        Retorna True si hubo cambio de fase.
-        """
+    
         with self.lock:
             self.tiempo_restante -= segundos
 
