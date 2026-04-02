@@ -20,7 +20,7 @@ class Camara(Sensores):
             "volumen": self.Volumen,
             "velocidad_promedio": self.Velocidad_promedio,
             "timestamp": self.Calcular_Timestamp(),
-            "cola horizontal": self.Cola_horizontal,
+            "cola_horizontal": self.Cola_horizontal,
             "cola_vertical":self.Cola_vertical
         }
         print(f"📹 [ENVÍO] {self.Sensor_id}: {json.dumps(evento)}")
