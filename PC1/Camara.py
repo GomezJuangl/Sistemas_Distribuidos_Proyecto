@@ -2,10 +2,12 @@ from Sensores import Sensores
 import json
 
 class Camara(Sensores):
-    def __init__(self, Sensor_id, Interseccion, Timespant, socket, Volumen, Velocidad_promedio):
+    def __init__(self, Sensor_id, Interseccion, Timespant, socket, Volumen, Velocidad_promedio, Cola_horizontal, Cola_vertical):
         super().__init__(Sensor_id, "Camara", Interseccion, Timespant, socket)
         self.Volumen = Volumen
         self.Velocidad_promedio = Velocidad_promedio
+        self.Cola_horizontal = Cola_horizontal
+        self.Cola_vertical = Cola_vertical
 
     def Generar_id(self, M, N):
         self.set_Sensor_id(f"CAM-{M}{N}")
@@ -17,7 +19,9 @@ class Camara(Sensores):
             "interseccion": f"INT-{self.Interseccion[0]}{self.Interseccion[1]}",
             "volumen": self.Volumen,
             "velocidad_promedio": self.Velocidad_promedio,
-            "timestamp": self.Calcular_Timestamp()
+            "timestamp": self.Calcular_Timestamp(),
+            "cola horizontal": self.Cola_horizontal,
+            "cola_vertical":self.Cola_vertical
         }
         print(f"📹 [ENVÍO] {self.Sensor_id}: {json.dumps(evento)}")
         self.socket.send_string(json.dumps(evento))

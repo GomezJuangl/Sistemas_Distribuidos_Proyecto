@@ -62,7 +62,7 @@ class Interseccion:
         )
 
         # Sensores
-        self.Camara = Camara("", [M, N], intervalo_camara, self.socket, 0, 0)
+        self.Camara = Camara("", [M, N], intervalo_camara, self.socket, 0, 0,0,0)
         self.GPS = GPS("", [M, N], intervalo_gps, self.socket, 0, "NORMAL")
         self.Espira_inductiva = Espira_inductiva(
             "", [M, N], intervalo_espira, self.socket, 0, intervalo_espira, None, None
@@ -116,9 +116,9 @@ class Interseccion:
 
         # Velocidad derivada de la carga real del cruce
         if cola_max <= 3 and cola_total <= 6:
-            self.velocidad_promedio = random.randint(40, 50)
+            self.velocidad_promedio = random.randint(40, 50) #alta velocidad, valores bajos en las colas 
         elif cola_max <= 8 and cola_total <= 14:
-            self.velocidad_promedio = random.randint(28, 39)
+            self.velocidad_promedio = random.randint(28, 39) 
         elif cola_max <= 15 and cola_total <= 28:
             self.velocidad_promedio = random.randint(15, 27)
         else:
@@ -191,6 +191,8 @@ class Interseccion:
         snapshot = self.obtener_snapshot()
         self.Camara.Volumen = snapshot["cola_max"]
         self.Camara.Velocidad_promedio = snapshot["velocidad_promedio"]
+        self.Camara.Cola_horizontal = snapshot["cola_horizontal"]
+        self.Camara.Cola_vertical = snapshot["cola_vertical"]
         self.Camara.Envio_de_datos()
 
     def _publicar_gps(self):
