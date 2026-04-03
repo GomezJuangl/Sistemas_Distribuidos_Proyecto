@@ -15,25 +15,7 @@ class Monitoreo_Consulta():
 
         self.usuario = None
 
-    def iniciar_sesion(self):
-        print("\n" + "=" * 50)
-        print("  INICIO DE SESIÓN")
-        print("=" * 50)
-        usuario = input("  Usuario: ")
-        clave = input("  Contraseña: ")
 
-        usuarios_validos = {
-            "admin": "1234",
-            "operador": "5678",
-        }
-
-        if usuario in usuarios_validos and usuarios_validos[usuario] == clave:
-            self.usuario = usuario
-            print(f"\n  Bienvenido, {usuario}!")
-            return True
-        else:
-            print("\n  Usuario o contraseña incorrectos.")
-            return False
 
     def ConsultaBD(self):
         print("\n" + "=" * 50)
@@ -125,10 +107,6 @@ class Monitoreo_Consulta():
         return True
 
     def run(self):
-        while True:
-            if self.iniciar_sesion():
-                break
-            print("  Intente de nuevo.\n")
 
         while True:
             continuar = self.ConsultaBD()

@@ -25,10 +25,10 @@ class ServicioAnalitica:
         self.BD_REPLICA_PUERTO = 7002
 
         # UMBRALES 
-        self.umbral_volumen_congestion = 12
-        self.umbral_velocidad_baja = 12
-        self.umbral_vehiculos_espira = 40
-        self.umbral_diferencia_colas = 2
+        self.umbral_volumen_congestion = 15
+        self.umbral_velocidad_baja = 10
+        self.umbral_vehiculos_espira = 60
+        self.umbral_diferencia_colas = 3
 
         # ESTADO INTERNO
         self.estado_intersecciones = {}
@@ -61,6 +61,26 @@ class ServicioAnalitica:
                     "ultima_decision": "SIN_ACCION",
                     "ultima_actualizacion": None,
                 }
+
+    def imprimir_reglas(self):
+        print("=" * 75)
+        print("[ANALITICA] REGLAS DE CLASIFICACION DE TRAFICO")
+        print("=" * 75)
+        print(f"  TRAFICO NORMAL:")
+        print(f"    Volumen (cola max)    < {self.umbral_volumen_congestion} vehiculos")
+        print(f"    Velocidad promedio    > {self.umbral_velocidad_baja} km/h")
+        print(f"    Congestion GPS       != ALTA")
+        print(f"    Vehiculos espira     < {self.umbral_vehiculos_espira} vehiculos/ciclo")
+        print(f"  CONGESTION (se activa si ANY condicion se cumple):")
+        print(f"    Volumen (cola max)   >= {self.umbral_volumen_congestion} vehiculos")
+        print(f"    Velocidad promedio   <= {self.umbral_velocidad_baja} km/h")
+        print(f"    Congestion GPS       == ALTA")
+        print(f"    Vehiculos espira    >= {self.umbral_vehiculos_espira} vehiculos/ciclo")
+        print(f"  CONGESTION DIRECCIONAL:")
+        print(f"    Diferencia entre colas H y V >= {self.umbral_diferencia_colas} -> se identifica eje congestionado")
+        print(f"  PRIORIZACION:")
+        print(f"    Comando manual desde el servicio de monitoreo (ej: paso de ambulancia)")
+        print("=" * 75)
 
     def conectar(self):
         # SUB: recibe del broker (con suscripción por tópicos)
@@ -107,7 +127,7 @@ class ServicioAnalitica:
             self.estado_intersecciones[interseccion]["eje_congestionado"] = eje_congestionado
             self.estado_intersecciones[interseccion]["ultima_decision"] = accion
 
-            self.imprimir_resumen(interseccion)
+            self.imprimir_resumen(interseccion, evento, estado_trafico, accion)
             self.enviar_comando_control(interseccion, accion)
 
             # Enviar a BDs en hilos separados para no bloquear (con locks)
@@ -311,26 +331,26 @@ class ServicioAnalitica:
 
     # LOGS
     
-    def imprimir_resumen(self, interseccion):
-        datos = self.estado_intersecciones[interseccion]
-        print("-" * 75)
-        print(f"[ANALITICA] {interseccion}")
-        print(f"Estado actual:      {datos['estado_actual']}")
-        print(f"Eje congestionado:  {datos['eje_congestionado']}")
-        print(f"Ultima decision:    {datos['ultima_decision']}")
-        print(f"Ultima actualizac.: {datos['ultima_actualizacion']}")
+    def imprimir_resumen(self, interseccion, evento, estado_trafico, accion):
+        tipo = evento.get("tipo_sensor", "?")
+        linea = f"[ANALITICA] {interseccion} | Sensor: {tipo} | Estado: {estado_trafico} | Accion: {accion}"
 
-        if datos["camara"] is not None:
-            cam = datos["camara"]
-            print(f"Camara -> volumen={cam.get('volumen')} | vel={cam.get('velocidad_promedio')} | colaH={cam.get('cola_horizontal')} | colaV={cam.get('cola_vertical')}")
-
-        if datos["gps"] is not None:
-            gps = datos["gps"]
-            print(f"GPS    -> vel={gps.get('velocidad_promedio')} | nivel={gps.get('nivel_congestion')}")
-
-        if datos["espira"] is not None:
-            esp = datos["espira"]
-            print(f"Espira -> vehiculos={esp.get('vehiculos_contados')} | intervalo={esp.get('intervalo_segundos')}")
+        if estado_trafico != "NORMAL":
+            # Solo imprime detalle cuando hay congestión
+            datos = self.estado_intersecciones[interseccion]
+            detalle = ""
+            if datos["camara"] is not None:
+                cam = datos["camara"]
+                detalle += f" | Cam: vol={cam.get('volumen')} vel={cam.get('velocidad_promedio')} colaH={cam.get('cola_horizontal')} colaV={cam.get('cola_vertical')}"
+            if datos["gps"] is not None:
+                gps = datos["gps"]
+                detalle += f" | GPS: vel={gps.get('velocidad_promedio')} nivel={gps.get('nivel_congestion')}"
+            if datos["espira"] is not None:
+                esp = datos["espira"]
+                detalle += f" | Esp: veh={esp.get('vehiculos_contados')}"
+            print(f"⚠️  {linea}{detalle}")
+        else:
+            print(f"✅ {linea}")
 
     # CIERRE
     
@@ -347,6 +367,7 @@ class ServicioAnalitica:
 
     def ejecutar(self):
         try:
+            self.imprimir_reglas()
             self.conectar()
             threading.Thread(target=self.escuchar_monitoreo, daemon=True).start()
             self.recibir_eventos()

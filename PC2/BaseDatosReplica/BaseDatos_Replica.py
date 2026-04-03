@@ -2,6 +2,7 @@ import zmq
 import sqlite3
 import json
 
+
 class BaseDatos():
     DB = "bd_replica.db"
 
