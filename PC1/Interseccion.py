@@ -55,7 +55,7 @@ class Interseccion:
 
         # Semáforo
         self.semaforo = Semaforo(
-            interseccion_id=f"INT-{M}{N}",
+            interseccion_id=f"INT_{M}{N}",
             fase_inicial=fase_inicial,
             duracion_normal=duracion_semaforo,
             offset_inicial=offset_inicial,
@@ -170,7 +170,7 @@ class Interseccion:
         estado_sem = self.semaforo.obtener_estado()
         with self.lock:
             return {
-                "interseccion": f"INT-{self.M}{self.N}",
+                "interseccion": f"INT_{self.M}{self.N}",
                 "direccion_fila": self.direccion_fila,
                 "direccion_columna": self.direccion_columna,
                 "demanda": self.demanda,

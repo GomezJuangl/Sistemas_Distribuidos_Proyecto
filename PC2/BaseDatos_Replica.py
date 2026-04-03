@@ -3,7 +3,7 @@ import sqlite3
 import json
 
 class BaseDatos():
-    DB = "bd_principal.db" 
+    DB = "bd_replica.db"
 
     def conectar(self):
         return sqlite3.connect(self.DB)
@@ -50,6 +50,19 @@ class BaseDatos():
                 )
             """)  
 
+    def tabla_Decisiones(self):
+        """Tabla para almacenar las decisiones del servicio de analítica."""
+        with self.conectar() as con:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS DECISIONES(
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    INTERSECCION TEXT,
+                    ESTADO_TRAFICO TEXT,
+                    ACCION TEXT,
+                    TIMESTAMP TEXT
+                )
+            """)
+
     def insertar_GPS(self, id, tipo, inter, congestion, velocidad, timestamp):
         with self.conectar() as con:
             con.execute("""
@@ -71,6 +84,13 @@ class BaseDatos():
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (f"{id}_{ts_inicio}", tipo, inter, vehiculos, intervalo, ts_inicio, ts_fin))
 
+    def insertar_Decision(self, interseccion, estado_trafico, accion, timestamp):
+        with self.conectar() as con:
+            con.execute("""
+                INSERT INTO DECISIONES (INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP)
+                VALUES (?, ?, ?, ?)
+            """, (interseccion, estado_trafico, accion, timestamp))
+
     def __init__(self):
         self.context = zmq.Context()
         self.pull_socket = self.context.socket(zmq.PULL)
@@ -78,14 +98,19 @@ class BaseDatos():
         self.tabla_GPS()     
         self.tabla_Camara()
         self.tabla_Espira()
+        self.tabla_Decisiones()
 
     def run(self):
+        print("[BD REPLICA] Iniciada. Escuchando en :7002")
         while True:
             mensaje = self.pull_socket.recv_string()
             dato = json.loads(mensaje)
             evento = dato["evento"]
+            estado_trafico = dato.get("estado_trafico", "DESCONOCIDO")
+            accion = dato.get("accion", "SIN_ACCION")
+            timestamp_decision = dato.get("timestamp", "")
 
-            print(f"💾 Recibido: {evento['tipo_sensor']} | {evento['interseccion']} | estado: {dato['estado_trafico']}")
+            print(f"💾 [BD REPLICA] Recibido: {evento['tipo_sensor']} | {evento['interseccion']} | estado: {estado_trafico} | accion: {accion}")
 
             if evento["tipo_sensor"] == "gps":
                 self.insertar_GPS(
@@ -117,6 +142,14 @@ class BaseDatos():
                     evento["timestamp_inicio"],
                     evento["timestamp_fin"]
                 )
+
+            # Siempre registrar la decisión de la analítica
+            self.insertar_Decision(
+                dato.get("interseccion", evento["interseccion"]),
+                estado_trafico,
+                accion,
+                timestamp_decision
+            )
 
 if __name__ == "__main__":
     BD = BaseDatos()

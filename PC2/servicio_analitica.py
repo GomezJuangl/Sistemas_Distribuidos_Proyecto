@@ -27,7 +27,7 @@ class ServicioAnalitica:
         # UMBRALES 
         self.umbral_volumen_congestion = 12
         self.umbral_velocidad_baja = 12
-        self.umbral_vehiculos_espira = 40  # corregido, antes era 100
+        self.umbral_vehiculos_espira = 40
         self.umbral_diferencia_colas = 2
 
         # ESTADO INTERNO
@@ -37,9 +37,12 @@ class ServicioAnalitica:
         # ZMQ    
         self.contexto = zmq.Context()
         self.socket_sub_broker = None
-        self.socket_push_control = None
         self.socket_push_bd_principal = None
         self.socket_push_bd_replica = None
+
+        # Locks para proteger sockets compartidos entre hilos
+        self.lock_bd_principal = threading.Lock()
+        self.lock_bd_replica = threading.Lock()
 
     # INICIALIZACION
     
@@ -47,7 +50,7 @@ class ServicioAnalitica:
         letras = ["A", "B", "C", "D"]
         for letra in letras:
             for numero in range(1, 5):
-                interseccion = f"INT-{letra}{numero}"
+                interseccion = f"INT_{letra}{numero}"
                 self.estado_intersecciones[interseccion] = {
                     "camara": None,
                     "gps": None,
@@ -59,11 +62,14 @@ class ServicioAnalitica:
                 }
 
     def conectar(self):
-        # SUB: recibe del broker
+        # SUB: recibe del broker (con suscripción por tópicos)
         self.socket_sub_broker = self.contexto.socket(zmq.SUB)
         self.socket_sub_broker.connect(f"tcp://{self.BROKER_IP}:{self.BROKER_PUERTO}")
-        self.socket_sub_broker.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.socket_sub_broker.setsockopt_string(zmq.SUBSCRIBE, self.TOPIC_CAMARA)
+        self.socket_sub_broker.setsockopt_string(zmq.SUBSCRIBE, self.TOPIC_GPS)
+        self.socket_sub_broker.setsockopt_string(zmq.SUBSCRIBE, self.TOPIC_ESPIRA)
         print(f"[ANALITICA] Conectada al broker en tcp://{self.BROKER_IP}:{self.BROKER_PUERTO}")
+        print(f"[ANALITICA] Suscrita a tópicos: {self.TOPIC_CAMARA}, {self.TOPIC_GPS}, {self.TOPIC_ESPIRA}")
 
         # PUSH: envia a BD principal (PC3)
         self.socket_push_bd_principal = self.contexto.socket(zmq.PUSH)
@@ -79,8 +85,8 @@ class ServicioAnalitica:
     
     def recibir_eventos(self):
         while True:
-            mensaje = self.socket_sub_broker.recv_string()
-            evento = self.parsear_evento(mensaje)
+            mensaje_raw = self.socket_sub_broker.recv_string()
+            evento = self.parsear_evento(mensaje_raw)
 
             if evento is None:
                 continue
@@ -98,27 +104,39 @@ class ServicioAnalitica:
             self.imprimir_resumen(interseccion)
             self.enviar_comando_control(interseccion, accion)
 
-            # Enviar a BDs en hilos separados para no bloquear
+            # Enviar a BDs en hilos separados para no bloquear (con locks)
             threading.Thread(
                 target=self.enviar_bd,
-                args=(self.socket_push_bd_principal, interseccion, evento, estado_trafico, accion, "BD principal")
+                args=(self.socket_push_bd_principal, self.lock_bd_principal,
+                      interseccion, evento, estado_trafico, accion, "BD principal")
             ).start()
             threading.Thread(
                 target=self.enviar_bd,
-                args=(self.socket_push_bd_replica, interseccion, evento, estado_trafico, accion, "BD replica")
+                args=(self.socket_push_bd_replica, self.lock_bd_replica,
+                      interseccion, evento, estado_trafico, accion, "BD replica")
             ).start()
 
     # PARSING Y ACTUALIZACION
     
-    def parsear_evento(self, mensaje):
+    def parsear_evento(self, mensaje_raw):
+        """Separa el tópico del JSON y parsea el evento."""
         try:
-            evento = json.loads(mensaje)
+            # El mensaje viene como "topico {json}", separar por el primer espacio
+            partes = mensaje_raw.split(" ", 1)
+            if len(partes) < 2:
+                print(f"[ANALITICA] Mensaje sin tópico válido: {mensaje_raw[:60]}")
+                return None
+
+            topico = partes[0]
+            json_str = partes[1]
+
+            evento = json.loads(json_str)
             if "tipo_sensor" not in evento or "interseccion" not in evento:
                 print("[ANALITICA] Evento incompleto:", evento)
                 return None
             return evento
         except json.JSONDecodeError:
-            print("[ANALITICA] Error parseando JSON:", mensaje)
+            print("[ANALITICA] Error parseando JSON:", mensaje_raw[:80])
             return None
 
     def actualizar_estado_interseccion(self, evento):
@@ -181,7 +199,6 @@ class ServicioAnalitica:
             if vehiculos >= self.umbral_vehiculos_espira:
                 espira_alta = True
 
-        # velocidad_baja ahora incluida en la decision
         hay_congestion = volumen_alto or cola_alta or gps_alta or espira_alta or velocidad_baja
 
         if not hay_congestion:
@@ -240,13 +257,15 @@ class ServicioAnalitica:
 
     # SALIDAS
     
-    def _enviar(self, socket, mensaje, nombre):
-        try:
-            socket.send_string(mensaje, zmq.NOBLOCK)
-        except zmq.Again:
-            print(f"⚠️ {nombre} no disponible, mensaje descartado")
+    def _enviar(self, socket, lock, mensaje, nombre):
+        """Envío thread-safe: protege el socket con un lock."""
+        with lock:
+            try:
+                socket.send_string(mensaje, zmq.NOBLOCK)
+            except zmq.Again:
+                print(f"⚠️ {nombre} no disponible, mensaje descartado")
 
-    def enviar_bd(self, socket, interseccion, evento, estado_trafico, accion, nombre):
+    def enviar_bd(self, socket, lock, interseccion, evento, estado_trafico, accion, nombre):
         mensaje = json.dumps({
             "evento": evento,
             "interseccion": interseccion,
@@ -254,7 +273,7 @@ class ServicioAnalitica:
             "accion": accion,
             "timestamp": datetime.now().isoformat()
         })
-        self._enviar(socket, mensaje, nombre)
+        self._enviar(socket, lock, mensaje, nombre)
 
     def enviar_comando_control(self, interseccion, accion):
         # Por ahora solo imprime, luego se conecta al servicio de semaforos
