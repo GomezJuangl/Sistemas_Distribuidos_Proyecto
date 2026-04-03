@@ -1,6 +1,8 @@
 import zmq
 import sqlite3
 import json
+import threading
+import time
 
 class BaseDatos():
     DB = "bd_principal.db" 
@@ -95,12 +97,96 @@ class BaseDatos():
         self.context = zmq.Context()
         self.pull_socket = self.context.socket(zmq.PULL)
         self.pull_socket.bind("tcp://*:7001")
+
+        self.rep_socket = self.context.socket(zmq.REP)
+        self.rep_socket.bind("tcp://*:5101")
+
+
         self.tabla_GPS()     
         self.tabla_Camara()
         self.tabla_Espira()
         self.tabla_Decisiones()
 
-    def run(self):
+
+
+    def RespuestaServ(self):
+        while True:
+            mensaje = self.rep_socket.recv_string()
+            print(f"Peticion {mensaje} Recibida")
+
+            try:
+                consulta = json.loads(mensaje)
+                tipo = consulta.get("tipo", "")
+                con = self.conectar()
+
+                if tipo == "estado_actual":
+                    interseccion = consulta["interseccion"]
+                    cam = con.execute("SELECT VOLUMEN, VELOCIDAD_PROMEDIO, COLA_HORIZONTAL, COLA_VERTICAL, TIMESTAMP FROM CAMARA WHERE INTERSECCION = ? ORDER BY TIMESTAMP DESC LIMIT 1", (interseccion,)).fetchone()
+                    gps = con.execute("SELECT NIVEL_CONGESTION, VELOCIDAD_PROMEDIO, TIMESTAMP FROM GPS WHERE INTERSECCION = ? ORDER BY TIMESTAMP DESC LIMIT 1", (interseccion,)).fetchone()
+                    esp = con.execute("SELECT VEHICULOS_CONTADOS, INTERVALO_SEGUNDOS, TIMESTAMP_INICIO, TIMESTAMP_FIN FROM ESPIRA WHERE INTERSECCION = ? ORDER BY TIMESTAMP_FIN DESC LIMIT 1", (interseccion,)).fetchone()
+                    dec = con.execute("SELECT ESTADO_TRAFICO, ACCION, TIMESTAMP FROM DECISIONES WHERE INTERSECCION = ? ORDER BY TIMESTAMP DESC LIMIT 1", (interseccion,)).fetchone()
+
+                    respuesta = f"\n{'='*55}\n  Estado actual de {interseccion}\n{'='*55}\n"
+                    if cam:
+                        respuesta += f"  CAMARA: Volumen={cam[0]} | Vel={cam[1]} km/h | ColaH={cam[2]} | ColaV={cam[3]} | {cam[4]}\n"
+                    else:
+                        respuesta += "  CAMARA: Sin datos\n"
+                    if gps:
+                        respuesta += f"  GPS: Congestion={gps[0]} | Vel={gps[1]} km/h | {gps[2]}\n"
+                    else:
+                        respuesta += "  GPS: Sin datos\n"
+                    if esp:
+                        respuesta += f"  ESPIRA: Vehiculos={esp[0]} | Intervalo={esp[1]}s | {esp[2]} -> {esp[3]}\n"
+                    else:
+                        respuesta += "  ESPIRA: Sin datos\n"
+                    if dec:
+                        respuesta += f"  DECISION: Estado={dec[0]} | Accion={dec[1]} | {dec[2]}\n"
+
+                    self.rep_socket.send_string(respuesta)
+
+                elif tipo == "historico":
+                    inicio = consulta["inicio"]
+                    fin = consulta["fin"]
+                    rows = con.execute("SELECT INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP FROM DECISIONES WHERE TIMESTAMP BETWEEN ? AND ? ORDER BY TIMESTAMP", (inicio, fin)).fetchall()
+
+                    respuesta = f"\n{'='*65}\n  Historico: {inicio} -> {fin}\n  Total: {len(rows)} registros\n{'='*65}\n"
+                    if rows:
+                        for r in rows[-15:]:
+                            respuesta += f"  {r[0]:<15} {r[1]:<25} {r[2]:<25} {r[3]}\n"
+                        if len(rows) > 15:
+                            respuesta += f"  ... y {len(rows) - 15} registros mas\n"
+                    else:
+                        respuesta += "  No se encontraron registros en ese rango\n"
+
+                    self.rep_socket.send_string(respuesta)
+
+                elif tipo == "decisiones_interseccion":
+                    interseccion = consulta["interseccion"]
+                    rows = con.execute("SELECT ESTADO_TRAFICO, ACCION, TIMESTAMP FROM DECISIONES WHERE INTERSECCION = ? ORDER BY TIMESTAMP", (interseccion,)).fetchall()
+
+                    respuesta = f"\n{'='*65}\n  Decisiones para {interseccion}\n  Total: {len(rows)} registros\n{'='*65}\n"
+                    if rows:
+                        for r in rows[-15:]:
+                            respuesta += f"  {r[0]:<25} {r[1]:<25} {r[2]}\n"
+                        if len(rows) > 15:
+                            respuesta += f"  ... y {len(rows) - 15} registros mas\n"
+                    else:
+                        respuesta += "  No se encontraron decisiones para esa interseccion\n"
+
+                    self.rep_socket.send_string(respuesta)
+
+                else:
+                    self.rep_socket.send_string("Tipo de consulta no reconocido")
+
+                con.close()
+
+            except Exception as e:
+                print(f"[BD] Error: {e}")
+                self.rep_socket.send_string(f"Error procesando consulta: {e}")
+
+
+
+    def BD(self):
         print("[BD PRINCIPAL] Iniciada. Escuchando en :7001")
         while True:
             mensaje = self.pull_socket.recv_string()
@@ -110,7 +196,7 @@ class BaseDatos():
             accion = dato.get("accion", "SIN_ACCION")
             timestamp_decision = dato.get("timestamp", "")
 
-            print(f"💾 [BD PRINCIPAL] Recibido: {evento['tipo_sensor']} | {evento['interseccion']} | estado: {estado_trafico} | accion: {accion}")
+            #print(f"💾 [BD PRINCIPAL] Recibido: {evento['tipo_sensor']} | {evento['interseccion']} | estado: {estado_trafico} | accion: {accion}")
 
             if evento["tipo_sensor"] == "gps":
                 self.insertar_GPS(
@@ -150,6 +236,15 @@ class BaseDatos():
                 accion,
                 timestamp_decision
             )
+
+
+    def run(self):
+        threading.Thread(target=self.RespuestaServ,daemon=True).start()
+        threading.Thread(target=self.BD,daemon=True).start()
+
+        while True:
+            time.sleep(1)
+
 
 if __name__ == "__main__":
     BD = BaseDatos()

@@ -39,6 +39,7 @@ class ServicioAnalitica:
         self.socket_sub_broker = None
         self.socket_push_bd_principal = None
         self.socket_push_bd_replica = None
+        self.socket_rep_monitoreo = None
 
         # Locks para proteger sockets compartidos entre hilos
         self.lock_bd_principal = threading.Lock()
@@ -81,6 +82,11 @@ class ServicioAnalitica:
         self.socket_push_bd_replica.connect(f"tcp://{self.BD_REPLICA_IP}:{self.BD_REPLICA_PUERTO}")
         print(f"[ANALITICA] Conectada a BD replica en tcp://{self.BD_REPLICA_IP}:{self.BD_REPLICA_PUERTO}")
 
+        # REP: recibe indicaciones directas del monitoreo (PC3)
+        self.socket_rep_monitoreo = self.contexto.socket(zmq.REP)
+        self.socket_rep_monitoreo.bind(f"tcp://*:{self.CONTROL_PUERTO}")
+        print(f"[ANALITICA] REP escuchando en tcp://*:{self.CONTROL_PUERTO}")
+
     # LOOP PRINCIPAL
     
     def recibir_eventos(self):
@@ -116,12 +122,33 @@ class ServicioAnalitica:
                       interseccion, evento, estado_trafico, accion, "BD replica")
             ).start()
 
+    # ESCUCHAR MONITOREO (hilo aparte)
+
+    def escuchar_monitoreo(self):
+        print("[ANALITICA] Hilo de monitoreo activo, esperando comandos...")
+        while True:
+            mensaje = self.socket_rep_monitoreo.recv_string()
+            print(f"[ANALITICA] Comando recibido del monitoreo: {mensaje}")
+            try:
+                comando = json.loads(mensaje)
+                if comando.get("tipo") == "prioridad":
+                    interseccion = comando["interseccion"]
+                    eje = comando["eje"]
+                    duracion = comando["duracion"]
+                    self.forzar_prioridad(interseccion, eje, duracion)
+                    self.socket_rep_monitoreo.send_string(
+                        f"OK: Ola verde activada en {interseccion} eje {eje} por {duracion}s"
+                    )
+                else:
+                    self.socket_rep_monitoreo.send_string("Comando no reconocido")
+            except Exception as e:
+                self.socket_rep_monitoreo.send_string(f"Error: {e}")
+
     # PARSING Y ACTUALIZACION
     
     def parsear_evento(self, mensaje_raw):
         """Separa el tópico del JSON y parsea el evento."""
         try:
-            # El mensaje viene como "topico {json}", separar por el primer espacio
             partes = mensaje_raw.split(" ", 1)
             if len(partes) < 2:
                 print(f"[ANALITICA] Mensaje sin tópico válido: {mensaje_raw[:60]}")
@@ -314,11 +341,14 @@ class ServicioAnalitica:
             self.socket_push_bd_principal.close()
         if self.socket_push_bd_replica is not None:
             self.socket_push_bd_replica.close()
+        if self.socket_rep_monitoreo is not None:
+            self.socket_rep_monitoreo.close()
         self.contexto.term()
 
     def ejecutar(self):
         try:
             self.conectar()
+            threading.Thread(target=self.escuchar_monitoreo, daemon=True).start()
             self.recibir_eventos()
         except KeyboardInterrupt:
             print("\n[ANALITICA] Servicio detenido por el usuario")
