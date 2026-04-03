@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 
 import zmq
 
-from GPS import GPS
-from Camara import Camara
-from Espira_inductiva import Espira_inductiva
-from Semaforo import Semaforo
+from Sensores.GPS import GPS
+from Sensores.Camara import Camara
+from Sensores.Espira_inductiva import Espira_inductiva
+from Logica_Trafico.Semaforo import Semaforo
 
 
 class Interseccion:

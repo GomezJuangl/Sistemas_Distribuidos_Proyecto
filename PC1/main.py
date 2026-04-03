@@ -1,4 +1,4 @@
-from Ciudad_matriz import Ciudad_matriz
+from Logica_Trafico.Ciudad_matriz import Ciudad_matriz
 
 ciudad = Ciudad_matriz(
     filas=4,
