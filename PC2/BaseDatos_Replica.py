@@ -74,7 +74,7 @@ class BaseDatos():
     def __init__(self):
         self.context = zmq.Context()
         self.pull_socket = self.context.socket(zmq.PULL)
-        self.pull_socket.bind("tcp://*:7001")
+        self.pull_socket.bind("tcp://*:7002")
         self.tabla_GPS()     
         self.tabla_Camara()
         self.tabla_Espira()
