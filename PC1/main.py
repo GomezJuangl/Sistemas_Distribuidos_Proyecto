@@ -1,5 +1,5 @@
 from Logica_Trafico.Ciudad_matriz import Ciudad_matriz
-
+from Control_Semaforos.receptor_control_semaforos import ReceptorControlSemaforos
 ciudad = Ciudad_matriz(
     filas=4,
     columnas=4,
@@ -14,5 +14,7 @@ ciudad = Ciudad_matriz(
     zonas_altas=[("B", 3)],
 )
 
+receptor_control = ReceptorControlSemaforos(ciudad, puerto=6003)
+receptor_control.iniciar()
 ciudad.Mostrar_matriz()
 ciudad.iniciar_simulacion(duracion_total=None)

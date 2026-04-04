@@ -18,6 +18,9 @@ class ServicioAnalitica:
         self.CONTROL_IP = "127.0.0.1"
         self.CONTROL_PUERTO = 6001
 
+        self.SEMAFOROS_PUSH_IP = "127.0.0.1"
+        self.SEMAFOROS_PUSH_PUERTO = 6002
+
         self.BD_PRINCIPAL_IP = "127.0.0.1"
         self.BD_PRINCIPAL_PUERTO = 7001
 
@@ -40,7 +43,7 @@ class ServicioAnalitica:
         self.socket_push_bd_principal = None
         self.socket_push_bd_replica = None
         self.socket_rep_monitoreo = None
-
+        self.socket_push_control = None
         # Locks para proteger sockets compartidos entre hilos
         self.lock_bd_principal = threading.Lock()
         self.lock_bd_replica = threading.Lock()
@@ -106,6 +109,11 @@ class ServicioAnalitica:
         self.socket_rep_monitoreo = self.contexto.socket(zmq.REP)
         self.socket_rep_monitoreo.bind(f"tcp://*:{self.CONTROL_PUERTO}")
         print(f"[ANALITICA] REP escuchando en tcp://*:{self.CONTROL_PUERTO}")
+
+        # PUSH: envia al servicio de control de semaforos (PC2)
+        self.socket_push_control = self.contexto.socket(zmq.PUSH)
+        self.socket_push_control.connect(f"tcp://{self.SEMAFOROS_PUSH_IP}:{self.SEMAFOROS_PUSH_PUERTO}")
+        print(f"[ANALITICA] Conectada a control de semaforos en tcp://{self.SEMAFOROS_PUSH_IP}:{self.SEMAFOROS_PUSH_PUERTO}")
 
     # LOOP PRINCIPAL
     
@@ -323,11 +331,49 @@ class ServicioAnalitica:
         self._enviar(socket, lock, mensaje, nombre)
 
     def enviar_comando_control(self, interseccion, accion):
-        # Por ahora solo imprime, luego se conecta al servicio de semaforos
-        print(f"[CONTROL] Interseccion={interseccion} | Accion={accion}")
+        # Solo enviar al servicio de control cuando hay una accion real sobre el semaforo
+        if accion not in ("FORZAR_HORIZONTAL", "FORZAR_VERTICAL"):
+            return
+
+        if self.socket_push_control is None:
+            print("[CONTROL] socket_push_control no inicializado")
+            return
+
+        payload = {
+            "interseccion": interseccion,
+            "accion": accion,
+            "duracion": 20,
+            "timestamp": datetime.now().isoformat(),
+            "origen": "servicio_analitica"
+        }
+
+        try:
+            self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
+            print(f"🚦 [CONTROL] Enviado al servicio de semaforos -> Interseccion={interseccion} | Accion={accion}")
+        except zmq.Again:
+            print(f"⚠️ [CONTROL] No se pudo enviar comando para {interseccion}")
 
     def forzar_prioridad(self, interseccion, eje, duracion):
-        print(f"[PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}")
+        accion = "FORZAR_HORIZONTAL" if eje == "H" else "FORZAR_VERTICAL"
+        print(f"🚑 [PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}s")
+
+        if self.socket_push_control is None:
+            print("[PRIORIDAD MANUAL] socket_push_control no inicializado")
+            return
+
+        payload = {
+            "interseccion": interseccion,
+            "accion": accion,
+            "duracion": duracion,
+            "timestamp": datetime.now().isoformat(),
+            "origen": "monitoreo_prioridad_manual"
+        }
+
+        try:
+            self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
+            print(f"🚑 [PRIORIDAD MANUAL] Comando enviado al servicio de semaforos")
+        except zmq.Again:
+            print(f"⚠️ [PRIORIDAD MANUAL] No se pudo enviar comando para {interseccion}")
 
     # LOGS
     
@@ -363,6 +409,8 @@ class ServicioAnalitica:
             self.socket_push_bd_replica.close()
         if self.socket_rep_monitoreo is not None:
             self.socket_rep_monitoreo.close()
+        if self.socket_push_control is not None:
+            self.socket_push_control.close()
         self.contexto.term()
 
     def ejecutar(self):
