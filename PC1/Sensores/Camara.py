@@ -1,4 +1,4 @@
-from Sensores import Sensores
+from Sensores.Sensores import Sensores
 import json
 
 class Camara(Sensores):
@@ -16,12 +16,13 @@ class Camara(Sensores):
         evento = {
             "sensor_id": self.Sensor_id,
             "tipo_sensor": "camara",
-            "interseccion": f"INT-{self.Interseccion[0]}{self.Interseccion[1]}",
+            "interseccion": f"INT_{self.Interseccion[0]}{self.Interseccion[1]}",
             "volumen": self.Volumen,
             "velocidad_promedio": self.Velocidad_promedio,
             "timestamp": self.Calcular_Timestamp(),
             "cola_horizontal": self.Cola_horizontal,
-            "cola_vertical":self.Cola_vertical
+            "cola_vertical": self.Cola_vertical
         }
-        print(f"📹 [ENVÍO] {self.Sensor_id}: {json.dumps(evento)}")
-        self.socket.send_string(json.dumps(evento))
+        mensaje = json.dumps(evento)
+        print(f"📹 [ENVÍO] {self.Sensor_id}: {mensaje}")
+        self.socket.send_string(f"camara {mensaje}")

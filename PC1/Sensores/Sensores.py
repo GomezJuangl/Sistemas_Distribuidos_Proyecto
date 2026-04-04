@@ -2,11 +2,11 @@ import zmq
 
 class Sensores():
     
-    def __init__(self, Sensor_id, Tipo_sensor, Interseccion, Timespant, socket):
+    def __init__(self, Sensor_id, Tipo_sensor, Interseccion, Timestamp, socket):
         self.Sensor_id = Sensor_id
         self.Tipo_sensor = Tipo_sensor
         self.Interseccion = Interseccion
-        self.Timespant = Timespant
+        self.Timestamp = Timestamp
         self.socket = socket
 
     def set_Sensor_id(self, new_id):
