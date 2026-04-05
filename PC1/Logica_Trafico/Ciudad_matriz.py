@@ -1,8 +1,8 @@
 import string
 import time
 
-from Interseccion import Interseccion
-from Semaforo import Semaforo
+from Logica_Trafico.Interseccion import Interseccion
+from Logica_Trafico.Semaforo import Semaforo
 
 
 class Ciudad_matriz:

@@ -8,7 +8,7 @@ class ServicioAnalitica:
     def __init__(self):
         
         # CONFIGURACION
-        self.BROKER_IP = "127.0.0.1"
+        self.BROKER_IP = "10.43.99.110"
         self.BROKER_PUERTO = 5556   
 
         self.TOPIC_CAMARA = "camara"
@@ -18,17 +18,20 @@ class ServicioAnalitica:
         self.CONTROL_IP = "127.0.0.1"
         self.CONTROL_PUERTO = 6001
 
-        self.BD_PRINCIPAL_IP = "127.0.0.1"
+        self.SEMAFOROS_PUSH_IP = "10.43.99.102"
+        self.SEMAFOROS_PUSH_PUERTO = 6002
+
+        self.BD_PRINCIPAL_IP = "10.43.100.49"
         self.BD_PRINCIPAL_PUERTO = 7001
 
-        self.BD_REPLICA_IP = "127.0.0.1"
+        self.BD_REPLICA_IP = "10.43.99.102"
         self.BD_REPLICA_PUERTO = 7002
 
         # UMBRALES 
-        self.umbral_volumen_congestion = 12
-        self.umbral_velocidad_baja = 12
-        self.umbral_vehiculos_espira = 40
-        self.umbral_diferencia_colas = 2
+        self.umbral_volumen_congestion = 15
+        self.umbral_velocidad_baja = 10
+        self.umbral_vehiculos_espira = 60
+        self.umbral_diferencia_colas = 3
 
         # ESTADO INTERNO
         self.estado_intersecciones = {}
@@ -39,7 +42,8 @@ class ServicioAnalitica:
         self.socket_sub_broker = None
         self.socket_push_bd_principal = None
         self.socket_push_bd_replica = None
-
+        self.socket_rep_monitoreo = None
+        self.socket_push_control = None
         # Locks para proteger sockets compartidos entre hilos
         self.lock_bd_principal = threading.Lock()
         self.lock_bd_replica = threading.Lock()
@@ -61,6 +65,26 @@ class ServicioAnalitica:
                     "ultima_actualizacion": None,
                 }
 
+    def imprimir_reglas(self):
+        print("=" * 75)
+        print("[ANALITICA] REGLAS DE CLASIFICACION DE TRAFICO")
+        print("=" * 75)
+        print(f"  TRAFICO NORMAL:")
+        print(f"    Volumen (cola max)    < {self.umbral_volumen_congestion} vehiculos")
+        print(f"    Velocidad promedio    > {self.umbral_velocidad_baja} km/h")
+        print(f"    Congestion GPS       != ALTA")
+        print(f"    Vehiculos espira     < {self.umbral_vehiculos_espira} vehiculos/ciclo")
+        print(f"  CONGESTION (se activa si ANY condicion se cumple):")
+        print(f"    Volumen (cola max)   >= {self.umbral_volumen_congestion} vehiculos")
+        print(f"    Velocidad promedio   <= {self.umbral_velocidad_baja} km/h")
+        print(f"    Congestion GPS       == ALTA")
+        print(f"    Vehiculos espira    >= {self.umbral_vehiculos_espira} vehiculos/ciclo")
+        print(f"  CONGESTION DIRECCIONAL:")
+        print(f"    Diferencia entre colas H y V >= {self.umbral_diferencia_colas} -> se identifica eje congestionado")
+        print(f"  PRIORIZACION:")
+        print(f"    Comando manual desde el servicio de monitoreo (ej: paso de ambulancia)")
+        print("=" * 75)
+
     def conectar(self):
         # SUB: recibe del broker (con suscripción por tópicos)
         self.socket_sub_broker = self.contexto.socket(zmq.SUB)
@@ -80,6 +104,16 @@ class ServicioAnalitica:
         self.socket_push_bd_replica = self.contexto.socket(zmq.PUSH)
         self.socket_push_bd_replica.connect(f"tcp://{self.BD_REPLICA_IP}:{self.BD_REPLICA_PUERTO}")
         print(f"[ANALITICA] Conectada a BD replica en tcp://{self.BD_REPLICA_IP}:{self.BD_REPLICA_PUERTO}")
+
+        # REP: recibe indicaciones directas del monitoreo (PC3)
+        self.socket_rep_monitoreo = self.contexto.socket(zmq.REP)
+        self.socket_rep_monitoreo.bind(f"tcp://*:{self.CONTROL_PUERTO}")
+        print(f"[ANALITICA] REP escuchando en tcp://*:{self.CONTROL_PUERTO}")
+
+        # PUSH: envia al servicio de control de semaforos (PC2)
+        self.socket_push_control = self.contexto.socket(zmq.PUSH)
+        self.socket_push_control.connect(f"tcp://{self.SEMAFOROS_PUSH_IP}:{self.SEMAFOROS_PUSH_PUERTO}")
+        print(f"[ANALITICA] Conectada a control de semaforos en tcp://{self.SEMAFOROS_PUSH_IP}:{self.SEMAFOROS_PUSH_PUERTO}")
 
     # LOOP PRINCIPAL
     
@@ -101,7 +135,7 @@ class ServicioAnalitica:
             self.estado_intersecciones[interseccion]["eje_congestionado"] = eje_congestionado
             self.estado_intersecciones[interseccion]["ultima_decision"] = accion
 
-            self.imprimir_resumen(interseccion)
+            self.imprimir_resumen(interseccion, evento, estado_trafico, accion)
             self.enviar_comando_control(interseccion, accion)
 
             # Enviar a BDs en hilos separados para no bloquear (con locks)
@@ -116,12 +150,33 @@ class ServicioAnalitica:
                       interseccion, evento, estado_trafico, accion, "BD replica")
             ).start()
 
+    # ESCUCHAR MONITOREO (hilo aparte)
+
+    def escuchar_monitoreo(self):
+        print("[ANALITICA] Hilo de monitoreo activo, esperando comandos...")
+        while True:
+            mensaje = self.socket_rep_monitoreo.recv_string()
+            print(f"[ANALITICA] Comando recibido del monitoreo: {mensaje}")
+            try:
+                comando = json.loads(mensaje)
+                if comando.get("tipo") == "prioridad":
+                    interseccion = comando["interseccion"]
+                    eje = comando["eje"]
+                    duracion = comando["duracion"]
+                    self.forzar_prioridad(interseccion, eje, duracion)
+                    self.socket_rep_monitoreo.send_string(
+                        f"OK: Ola verde activada en {interseccion} eje {eje} por {duracion}s"
+                    )
+                else:
+                    self.socket_rep_monitoreo.send_string("Comando no reconocido")
+            except Exception as e:
+                self.socket_rep_monitoreo.send_string(f"Error: {e}")
+
     # PARSING Y ACTUALIZACION
     
     def parsear_evento(self, mensaje_raw):
         """Separa el tópico del JSON y parsea el evento."""
         try:
-            # El mensaje viene como "topico {json}", separar por el primer espacio
             partes = mensaje_raw.split(" ", 1)
             if len(partes) < 2:
                 print(f"[ANALITICA] Mensaje sin tópico válido: {mensaje_raw[:60]}")
@@ -276,34 +331,72 @@ class ServicioAnalitica:
         self._enviar(socket, lock, mensaje, nombre)
 
     def enviar_comando_control(self, interseccion, accion):
-        # Por ahora solo imprime, luego se conecta al servicio de semaforos
-        print(f"[CONTROL] Interseccion={interseccion} | Accion={accion}")
+        # Solo enviar al servicio de control cuando hay una accion real sobre el semaforo
+        if accion not in ("FORZAR_HORIZONTAL", "FORZAR_VERTICAL"):
+            return
+
+        if self.socket_push_control is None:
+            print("[CONTROL] socket_push_control no inicializado")
+            return
+
+        payload = {
+            "interseccion": interseccion,
+            "accion": accion,
+            "duracion": 20,
+            "timestamp": datetime.now().isoformat(),
+            "origen": "servicio_analitica"
+        }
+
+        try:
+            self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
+            print(f"🚦 [CONTROL] Enviado al servicio de semaforos -> Interseccion={interseccion} | Accion={accion}")
+        except zmq.Again:
+            print(f"⚠️ [CONTROL] No se pudo enviar comando para {interseccion}")
 
     def forzar_prioridad(self, interseccion, eje, duracion):
-        print(f"[PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}")
+        accion = "FORZAR_HORIZONTAL" if eje == "H" else "FORZAR_VERTICAL"
+        print(f"🚑 [PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}s")
+
+        if self.socket_push_control is None:
+            print("[PRIORIDAD MANUAL] socket_push_control no inicializado")
+            return
+
+        payload = {
+            "interseccion": interseccion,
+            "accion": accion,
+            "duracion": duracion,
+            "timestamp": datetime.now().isoformat(),
+            "origen": "monitoreo_prioridad_manual"
+        }
+
+        try:
+            self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
+            print(f"🚑 [PRIORIDAD MANUAL] Comando enviado al servicio de semaforos")
+        except zmq.Again:
+            print(f"⚠️ [PRIORIDAD MANUAL] No se pudo enviar comando para {interseccion}")
 
     # LOGS
     
-    def imprimir_resumen(self, interseccion):
-        datos = self.estado_intersecciones[interseccion]
-        print("-" * 75)
-        print(f"[ANALITICA] {interseccion}")
-        print(f"Estado actual:      {datos['estado_actual']}")
-        print(f"Eje congestionado:  {datos['eje_congestionado']}")
-        print(f"Ultima decision:    {datos['ultima_decision']}")
-        print(f"Ultima actualizac.: {datos['ultima_actualizacion']}")
+    def imprimir_resumen(self, interseccion, evento, estado_trafico, accion):
+        tipo = evento.get("tipo_sensor", "?")
+        linea = f"[ANALITICA] {interseccion} | Sensor: {tipo} | Estado: {estado_trafico} | Accion: {accion}"
 
-        if datos["camara"] is not None:
-            cam = datos["camara"]
-            print(f"Camara -> volumen={cam.get('volumen')} | vel={cam.get('velocidad_promedio')} | colaH={cam.get('cola_horizontal')} | colaV={cam.get('cola_vertical')}")
-
-        if datos["gps"] is not None:
-            gps = datos["gps"]
-            print(f"GPS    -> vel={gps.get('velocidad_promedio')} | nivel={gps.get('nivel_congestion')}")
-
-        if datos["espira"] is not None:
-            esp = datos["espira"]
-            print(f"Espira -> vehiculos={esp.get('vehiculos_contados')} | intervalo={esp.get('intervalo_segundos')}")
+        if estado_trafico != "NORMAL":
+            # Solo imprime detalle cuando hay congestión
+            datos = self.estado_intersecciones[interseccion]
+            detalle = ""
+            if datos["camara"] is not None:
+                cam = datos["camara"]
+                detalle += f" | Cam: vol={cam.get('volumen')} vel={cam.get('velocidad_promedio')} colaH={cam.get('cola_horizontal')} colaV={cam.get('cola_vertical')}"
+            if datos["gps"] is not None:
+                gps = datos["gps"]
+                detalle += f" | GPS: vel={gps.get('velocidad_promedio')} nivel={gps.get('nivel_congestion')}"
+            if datos["espira"] is not None:
+                esp = datos["espira"]
+                detalle += f" | Esp: veh={esp.get('vehiculos_contados')}"
+            print(f"⚠️  {linea}{detalle}")
+        else:
+            print(f"✅ {linea}")
 
     # CIERRE
     
@@ -314,11 +407,17 @@ class ServicioAnalitica:
             self.socket_push_bd_principal.close()
         if self.socket_push_bd_replica is not None:
             self.socket_push_bd_replica.close()
+        if self.socket_rep_monitoreo is not None:
+            self.socket_rep_monitoreo.close()
+        if self.socket_push_control is not None:
+            self.socket_push_control.close()
         self.contexto.term()
 
     def ejecutar(self):
         try:
+            self.imprimir_reglas()
             self.conectar()
+            threading.Thread(target=self.escuchar_monitoreo, daemon=True).start()
             self.recibir_eventos()
         except KeyboardInterrupt:
             print("\n[ANALITICA] Servicio detenido por el usuario")

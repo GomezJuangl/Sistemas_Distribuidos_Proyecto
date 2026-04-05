@@ -1,4 +1,4 @@
-from Sensores import Sensores
+from Sensores.Sensores import Sensores
 import json
 from datetime import datetime, timedelta
 
