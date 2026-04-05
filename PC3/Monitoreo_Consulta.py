@@ -7,11 +7,11 @@ class Monitoreo_Consulta():
         self.Puerto_BDP = 5101 
         self.context = zmq.Context()
         self.req_socket = self.context.socket(zmq.REQ)
-        self.req_socket.connect(f"tcp://localhost:{self.Puerto_BDP}")
+        self.req_socket.connect(f"tcp://10.43.100.49:{self.Puerto_BDP}")
 
         self.Puerto_Analitica = 6001
         self.req_analitica = self.context.socket(zmq.REQ)
-        self.req_analitica.connect(f"tcp://localhost:{self.Puerto_Analitica}")
+        self.req_analitica.connect(f"tcp://10.43.99.102:{self.Puerto_Analitica}")
 
         self.usuario = None
 

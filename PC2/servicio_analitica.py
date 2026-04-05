@@ -8,7 +8,7 @@ class ServicioAnalitica:
     def __init__(self):
         
         # CONFIGURACION
-        self.BROKER_IP = "127.0.0.1"
+        self.BROKER_IP = "10.43.99.110"
         self.BROKER_PUERTO = 5556   
 
         self.TOPIC_CAMARA = "camara"
@@ -18,13 +18,13 @@ class ServicioAnalitica:
         self.CONTROL_IP = "127.0.0.1"
         self.CONTROL_PUERTO = 6001
 
-        self.SEMAFOROS_PUSH_IP = "127.0.0.1"
+        self.SEMAFOROS_PUSH_IP = "10.43.99.102"
         self.SEMAFOROS_PUSH_PUERTO = 6002
 
-        self.BD_PRINCIPAL_IP = "127.0.0.1"
+        self.BD_PRINCIPAL_IP = "10.43.100.49"
         self.BD_PRINCIPAL_PUERTO = 7001
 
-        self.BD_REPLICA_IP = "127.0.0.1"
+        self.BD_REPLICA_IP = "10.43.99.102"
         self.BD_REPLICA_PUERTO = 7002
 
         # UMBRALES 

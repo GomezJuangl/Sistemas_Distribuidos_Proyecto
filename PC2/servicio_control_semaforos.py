@@ -11,7 +11,7 @@ class ServicioControlSemaforos:
         self.PULL_IP = "127.0.0.1"
         self.PULL_PUERTO = 6002
 
-        self.PC1_IP = "127.0.0.1"
+        self.PC1_IP = "10.43.99.110"
         self.PC1_PUERTO = 6003
 
         # ==========================================

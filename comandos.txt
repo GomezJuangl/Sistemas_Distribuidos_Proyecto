@@ -1,5 +1,0 @@
-source .venv/bin/activate
-python3 Broker.py
-python3 main.py
-python3 servicio_control_semaforos.py
-python3 servicio_analitica.py
