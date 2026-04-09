@@ -1,6 +1,29 @@
 import zmq
 import json
 
+# ─── AUTENTICACIÓN ────────────────────────────────────────────────────────────
+USUARIO_VALIDO    = "admin"
+CONTRASENA_VALIDA = "1234"
+MAX_INTENTOS      = 3
+
+def login():
+    print("=" * 50)
+    print("  SISTEMA GITU — Monitoreo y Consulta")
+    print("=" * 50)
+    for intento in range(1, MAX_INTENTOS + 1):
+        usuario    = input("Usuario:    ").strip()
+        contrasena = input("Contraseña: ").strip()
+        if usuario == USUARIO_VALIDO and contrasena == CONTRASENA_VALIDA:
+            print(f"\nAcceso concedido. Bienvenido, {usuario}.\n")
+            return True
+        restantes = MAX_INTENTOS - intento
+        if restantes > 0:
+            print(f"Credenciales incorrectas. Intentos restantes: {restantes}\n")
+        else:
+            print("Acceso denegado. Número máximo de intentos alcanzado.")
+    return False
+# ──────────────────────────────────────────────────────────────────────────────
+
 class Monitoreo_Consulta():
     def __init__(self):
         self.IP = ""
@@ -114,5 +137,7 @@ class Monitoreo_Consulta():
                 break
 
 if __name__ == "__main__":
+    if not login():
+        exit(1)
     S = Monitoreo_Consulta()
     S.run()
