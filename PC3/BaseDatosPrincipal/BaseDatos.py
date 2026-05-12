@@ -61,7 +61,8 @@ class BaseDatos():
                     INTERSECCION TEXT,
                     ESTADO_TRAFICO TEXT,
                     ACCION TEXT,
-                    TIMESTAMP TEXT
+                    TIMESTAMP TEXT,
+                    UNIQUE(INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP)
                 )
             """)
 
@@ -89,7 +90,7 @@ class BaseDatos():
     def insertar_Decision(self, interseccion, estado_trafico, accion, timestamp):
         with self.conectar() as con:
             con.execute("""
-                INSERT INTO DECISIONES (INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP)
+                INSERT OR IGNORE INTO DECISIONES (INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP)
                 VALUES (?, ?, ?, ?)
             """, (interseccion, estado_trafico, accion, timestamp))
 
@@ -101,8 +102,15 @@ class BaseDatos():
         self.rep_socket = self.context.socket(zmq.REP)
         self.rep_socket.bind("tcp://*:5101")
 
+        # Health check: responde PONG a pings de PC2
+        self.health_socket = self.context.socket(zmq.REP)
+        self.health_socket.bind("tcp://*:7003")
 
-        self.tabla_GPS()     
+        # Sync: recibe datos de la replica cuando PC3 se recupera de una caida
+        self.pull_sync_socket = self.context.socket(zmq.PULL)
+        self.pull_sync_socket.bind("tcp://*:7004")
+
+        self.tabla_GPS()
         self.tabla_Camara()
         self.tabla_Espira()
         self.tabla_Decisiones()
@@ -238,10 +246,79 @@ class BaseDatos():
             )
 
 
-    def run(self):
-        threading.Thread(target=self.RespuestaServ,daemon=True).start()
-        threading.Thread(target=self.BD,daemon=True).start()
+    def health_check(self):
+        """Responde PONG a los pings de PC2 para indicar que PC3 esta vivo."""
+        print("[BD PRINCIPAL] Health check escuchando en :7003")
+        while True:
+            try:
+                msg = self.health_socket.recv_string()
+                self.health_socket.send_string("PONG")
+            except Exception:
+                pass
 
+    def recibir_sync(self):
+        """Recibe datos de sincronizacion desde la replica cuando PC3 se recupera."""
+        print("[BD PRINCIPAL] Sync escuchando en :7004")
+        contador = 0
+        while True:
+            try:
+                mensaje = self.pull_sync_socket.recv_string()
+                dato = json.loads(mensaje)
+                sync_tipo = dato.get("sync_tipo", "sensor")
+
+                if sync_tipo == "decision":
+                    try:
+                        self.insertar_Decision(
+                            dato["interseccion"], dato["estado_trafico"],
+                            dato["accion"], dato["timestamp"]
+                        )
+                        contador += 1
+                        if contador % 500 == 0:
+                            print(f"[BD PRINCIPAL] Sync: {contador} registros procesados")
+                    except Exception as e:
+                        print(f"[BD PRINCIPAL] Error insertando decision sync: {e} | dato={dato}")
+
+                elif sync_tipo == "sensor":
+                    evento = dato["evento"]
+                    try:
+                        if evento["tipo_sensor"] == "gps":
+                            self.insertar_GPS(
+                                evento["sensor_id"], evento["tipo_sensor"],
+                                evento["interseccion"], evento["nivel_congestion"],
+                                evento["velocidad_promedio"], evento["timestamp"]
+                            )
+                        elif evento["tipo_sensor"] == "camara":
+                            self.insertar_Camara(
+                                evento["sensor_id"], evento["tipo_sensor"],
+                                evento["interseccion"], evento["volumen"],
+                                evento["velocidad_promedio"], evento["cola_horizontal"],
+                                evento["cola_vertical"], evento["timestamp"]
+                            )
+                        elif evento["tipo_sensor"] == "espira_inductiva":
+                            self.insertar_Espira(
+                                evento["sensor_id"], evento["tipo_sensor"],
+                                evento["interseccion"], evento["vehiculos_contados"],
+                                evento["intervalo_segundos"], evento["timestamp_inicio"],
+                                evento["timestamp_fin"]
+                            )
+                        contador += 1
+                        if contador % 500 == 0:
+                            print(f"[BD PRINCIPAL] Sync: {contador} registros procesados")
+                    except sqlite3.IntegrityError:
+                        pass  # Registro ya existia en principal (normal en zona de margen)
+                    except Exception as e:
+                        print(f"[BD PRINCIPAL] Error insertando sensor sync: {e} | tipo={evento.get('tipo_sensor')} inter={evento.get('interseccion')}")
+
+            except Exception as e:
+                print(f"[BD PRINCIPAL] Error en loop sync: {e}")
+
+    def run(self):
+        threading.Thread(target=self.RespuestaServ, daemon=True).start()
+        threading.Thread(target=self.BD, daemon=True).start()
+        threading.Thread(target=self.health_check, daemon=True).start()
+        threading.Thread(target=self.recibir_sync, daemon=True).start()
+
+        print("[BD PRINCIPAL] Todos los servicios iniciados")
         while True:
             time.sleep(1)
 

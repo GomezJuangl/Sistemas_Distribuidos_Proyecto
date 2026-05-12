@@ -185,6 +185,8 @@ class Interseccion:
                 "luz_horizontal": estado_sem["luz_horizontal"],
                 "luz_vertical": estado_sem["luz_vertical"],
                 "tiempo_restante": estado_sem["tiempo_restante"],
+                "semaforo_fila": estado_sem["semaforo_fila"],
+                "semaforo_columna": estado_sem["semaforo_columna"],
             }
 
     def _publicar_camara(self):
@@ -217,9 +219,12 @@ class Interseccion:
 
     def _log_estado(self):
         s = self.obtener_snapshot()
+        sf = s['semaforo_fila']
+        sc = s['semaforo_columna']
         print(
             f"[{s['interseccion']}] "
-            f"H={s['luz_horizontal']} | V={s['luz_vertical']} | "
+            f"{sf['semaforo_id']}={sf['estado']} | "
+            f"{sc['semaforo_id']}={sc['estado']} | "
             f"restan={s['tiempo_restante']:2d}s | "
             f"ColaH={s['cola_horizontal']:2d} | "
             f"ColaV={s['cola_vertical']:2d} | "
@@ -263,9 +268,12 @@ class Interseccion:
             cambio = self.semaforo.tick(self.tick_segundos)
             if cambio:
                 estado = self.semaforo.obtener_estado()
+                sf = estado['semaforo_fila']
+                sc = estado['semaforo_columna']
                 print(
                     f"🚦 [{estado['interseccion_id']}] Cambio -> "
-                    f"H={estado['luz_horizontal']} / V={estado['luz_vertical']} "
+                    f"{sf['semaforo_id']}={sf['estado']} | "
+                    f"{sc['semaforo_id']}={sc['estado']} "
                     f"({estado['tiempo_restante']}s)"
                 )
 
@@ -291,11 +299,14 @@ class Interseccion:
 
     def Mostrar_IDS(self):
         estado = self.semaforo.obtener_estado()
+        sf = estado['semaforo_fila']
+        sc = estado['semaforo_columna']
         print(
             f"Intersección {self.M}{self.N} | "
             f"Fila={self.direccion_fila} | Col={self.direccion_columna} | "
             f"Demanda={self.demanda} | "
-            f"H={estado['luz_horizontal']} / V={estado['luz_vertical']} | "
+            f"{sf['semaforo_id']}={sf['estado']} | "
+            f"{sc['semaforo_id']}={sc['estado']} | "
             f"restan={estado['tiempo_restante']}s"
         )
         print(f"Camara:           {self.Camara.get_Sensor_id()}")

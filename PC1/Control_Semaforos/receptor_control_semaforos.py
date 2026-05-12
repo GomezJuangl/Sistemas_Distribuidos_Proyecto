@@ -82,13 +82,14 @@ class ReceptorControlSemaforos:
             return False, "Accion no soportada"
 
         estado = interseccion_obj.semaforo.obtener_estado()
+        sf = estado['semaforo_fila']
+        sc = estado['semaforo_columna']
 
         print(
             f"[PC1-RECEPTOR] Estado semaforo -> "
             f"Interseccion={interseccion_id} | "
-            f"Fase={estado['fase_actual']} | "
-            f"H={estado['luz_horizontal']} | "
-            f"V={estado['luz_vertical']} | "
+            f"{sf['semaforo_id']}={sf['estado']} | "
+            f"{sc['semaforo_id']}={sc['estado']} | "
             f"Restan={estado['tiempo_restante']}s | "
             f"Prioridad={estado['modo_prioridad']} | "
             f"Direccion={estado['direccion_prioritaria']}"

@@ -1,6 +1,8 @@
 import json
 import threading
-from datetime import datetime
+import time
+import sqlite3
+from datetime import datetime, timedelta
 import zmq
 
 
@@ -23,9 +25,18 @@ class ServicioAnalitica:
 
         self.BD_PRINCIPAL_IP = "127.0.0.1"
         self.BD_PRINCIPAL_PUERTO = 7001
+        self.BD_PRINCIPAL_HEALTH_PUERTO = 7003
+        self.BD_PRINCIPAL_SYNC_PUERTO = 7004
 
         self.BD_REPLICA_IP = "127.0.0.1"
         self.BD_REPLICA_PUERTO = 7002
+        self.BD_REPLICA_DB = "BaseDatosReplica/bd_replica.db"
+
+        # Estado de PC3
+        self.pc3_activo = True
+        self.timestamp_caida_pc3 = None
+        self.pc3_syncing = False          # True mientras sincronizar_bd esta en ejecucion
+        self.lock_pc3_estado = threading.Lock()
 
         # UMBRALES 
         self.umbral_volumen_congestion = 15
@@ -135,20 +146,24 @@ class ServicioAnalitica:
             self.estado_intersecciones[interseccion]["eje_congestionado"] = eje_congestionado
             self.estado_intersecciones[interseccion]["ultima_decision"] = accion
 
+            # El timestamp de decisión debe ser único por evento para principal y replica.
+            timestamp_decision = datetime.now().isoformat()
+
             self.imprimir_resumen(interseccion, evento, estado_trafico, accion)
             self.enviar_comando_control(interseccion, accion)
 
-            # Enviar a BDs en hilos separados para no bloquear (con locks)
-            threading.Thread(
-                target=self.enviar_bd,
-                args=(self.socket_push_bd_principal, self.lock_bd_principal,
-                      interseccion, evento, estado_trafico, accion, "BD principal")
-            ).start()
-            threading.Thread(
-                target=self.enviar_bd,
-                args=(self.socket_push_bd_replica, self.lock_bd_replica,
-                      interseccion, evento, estado_trafico, accion, "BD replica")
-            ).start()
+            # Primero persistir en replica (fuente de verdad para re-sync).
+            self.enviar_bd(
+                self.socket_push_bd_replica, self.lock_bd_replica,
+                interseccion, evento, estado_trafico, accion, timestamp_decision, "BD replica"
+            )
+
+            # Enviar a BD principal solo si PC3 esta activo.
+            if self.pc3_activo:
+                self.enviar_bd(
+                    self.socket_push_bd_principal, self.lock_bd_principal,
+                    interseccion, evento, estado_trafico, accion, timestamp_decision, "BD principal"
+                )
 
     # ESCUCHAR MONITOREO (hilo aparte)
 
@@ -312,25 +327,33 @@ class ServicioAnalitica:
 
     # SALIDAS
     
-    def _enviar(self, socket, lock, mensaje, nombre):
+    def _enviar(self, socket, lock, mensaje, nombre, no_bloqueante=True):
         """Envío thread-safe: protege el socket con un lock."""
         with lock:
             try:
-                socket.send_string(mensaje, zmq.NOBLOCK)
+                if no_bloqueante:
+                    socket.send_string(mensaje, zmq.NOBLOCK)
+                else:
+                    socket.send_string(mensaje)
             except zmq.Again:
                 print(f"⚠️ {nombre} no disponible, mensaje descartado")
 
-    def enviar_bd(self, socket, lock, interseccion, evento, estado_trafico, accion, nombre):
+    def enviar_bd(self, socket, lock, interseccion, evento, estado_trafico, accion, timestamp_decision, nombre):
         mensaje = json.dumps({
             "evento": evento,
             "interseccion": interseccion,
             "estado_trafico": estado_trafico,
             "accion": accion,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": timestamp_decision
         })
-        self._enviar(socket, lock, mensaje, nombre)
+        # Para BD priorizamos confiabilidad sobre descarte.
+        self._enviar(socket, lock, mensaje, nombre, no_bloqueante=False)
 
     def enviar_comando_control(self, interseccion, accion):
+        # Solo enviar al servicio de control cuando hay una accion real sobre el semaforo
+        if accion not in ("FORZAR_HORIZONTAL", "FORZAR_VERTICAL"):
+            return
+
         if self.socket_push_control is None:
             print("[CONTROL] socket_push_control no inicializado")
             return
@@ -338,19 +361,38 @@ class ServicioAnalitica:
         payload = {
             "interseccion": interseccion,
             "accion": accion,
-            "duracion": 20 if "FORZAR" in accion else 15,
+            "duracion": 20,
             "timestamp": datetime.now().isoformat(),
             "origen": "servicio_analitica"
         }
 
         try:
             self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
-            print(f"[CONTROL] Interseccion={interseccion} | Accion={accion}")
+            print(f"🚦 [CONTROL] Enviado al servicio de semaforos -> Interseccion={interseccion} | Accion={accion}")
         except zmq.Again:
             print(f"⚠️ [CONTROL] No se pudo enviar comando para {interseccion}")
 
     def forzar_prioridad(self, interseccion, eje, duracion):
-        print(f"[PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}")
+        accion = "FORZAR_HORIZONTAL" if eje == "H" else "FORZAR_VERTICAL"
+        print(f"🚑 [PRIORIDAD MANUAL] Interseccion={interseccion} | Eje={eje} | Duracion={duracion}s")
+
+        if self.socket_push_control is None:
+            print("[PRIORIDAD MANUAL] socket_push_control no inicializado")
+            return
+
+        payload = {
+            "interseccion": interseccion,
+            "accion": accion,
+            "duracion": duracion,
+            "timestamp": datetime.now().isoformat(),
+            "origen": "monitoreo_prioridad_manual"
+        }
+
+        try:
+            self.socket_push_control.send_string(json.dumps(payload), zmq.NOBLOCK)
+            print(f"🚑 [PRIORIDAD MANUAL] Comando enviado al servicio de semaforos")
+        except zmq.Again:
+            print(f"⚠️ [PRIORIDAD MANUAL] No se pudo enviar comando para {interseccion}")
 
     # LOGS
     
@@ -375,8 +417,196 @@ class ServicioAnalitica:
         else:
             print(f"✅ {linea}")
 
+    # HEALTH CHECK Y TOLERANCIA A FALLAS
+
+    def health_check_pc3(self):
+        """Cada 5 segundos hace ping a PC3. Si no responde, marca pc3_activo=False."""
+        HEALTH_TIMEOUT = 3000  # ms
+        INTERVALO = 5  # segundos
+
+        print(f"🚨🚨🚨🚨🚨 [HEALTH CHECK] Iniciado. Ping a PC3 cada {INTERVALO}s (timeout {HEALTH_TIMEOUT}ms) 🚨🚨🚨🚨🚨")
+
+        while True:
+            socket_ping = self.contexto.socket(zmq.REQ)
+            socket_ping.setsockopt(zmq.RCVTIMEO, HEALTH_TIMEOUT)
+            socket_ping.setsockopt(zmq.LINGER, 0)
+            socket_ping.connect(f"tcp://{self.BD_PRINCIPAL_IP}:{self.BD_PRINCIPAL_HEALTH_PUERTO}")
+
+            with self.lock_pc3_estado:
+                estado_anterior = self.pc3_activo
+
+            try:
+                socket_ping.send_string("PING")
+                respuesta = socket_ping.recv_string()
+
+                if respuesta == "PONG":
+                    iniciar_sync = False
+                    with self.lock_pc3_estado:
+                        self.pc3_activo = True
+                        # Lanzar sync solo si PC3 acaba de volver Y no hay sync en curso
+                        if not estado_anterior and not self.pc3_syncing:
+                            self.pc3_syncing = True
+                            iniciar_sync = True
+
+                    if iniciar_sync:
+                        print("✅✅✅✅✅ [HEALTH CHECK] PC3 recuperado. Iniciando sincronizacion... ✅✅✅✅✅")
+                        threading.Thread(target=self.sincronizar_bd, daemon=True).start()
+
+            except zmq.Again:
+                # Timeout: PC3 no respondio
+                with self.lock_pc3_estado:
+                    if self.pc3_activo:
+                        self.timestamp_caida_pc3 = datetime.now().isoformat()
+                        print(f"🔴🔴🔴🔴🔴 [HEALTH CHECK] PC3 NO RESPONDE. Marcado como caido. Timestamp: {self.timestamp_caida_pc3} 🔴🔴🔴🔴🔴")
+                    self.pc3_activo = False
+
+            except Exception as e:
+                with self.lock_pc3_estado:
+                    if self.pc3_activo:
+                        self.timestamp_caida_pc3 = datetime.now().isoformat()
+                    self.pc3_activo = False
+                print(f"❌❌❌❌❌ [HEALTH CHECK] Error: {e} ❌❌❌❌❌")
+
+            finally:
+                socket_ping.close()
+
+            time.sleep(INTERVALO)
+
+    def sincronizar_bd(self):
+        """Lee datos de la replica desde timestamp_caida y los envia a PC3 por PUSH."""
+        # Snapshot del timestamp dentro del lock para evitar condicion de carrera
+        with self.lock_pc3_estado:
+            ts_caida = self.timestamp_caida_pc3
+
+        if ts_caida is None:
+            print("🔄🔄🔄🔄🔄 [SYNC] No hay timestamp de caida, no se puede sincronizar 🔄🔄🔄🔄🔄")
+            with self.lock_pc3_estado:
+                self.pc3_syncing = False
+            return
+
+        # Margen de seguridad: 10 segundos antes de la caida detectada
+        timestamp_con_margen = (
+            datetime.fromisoformat(ts_caida) - timedelta(seconds=10)
+        ).isoformat()
+
+        print(f"🔄🔄🔄🔄🔄 [SYNC] Iniciando. Caida detectada: {ts_caida} 🔄🔄🔄🔄🔄")
+        print(f"🔄🔄🔄🔄🔄 [SYNC] Leyendo replica desde: {timestamp_con_margen} 🔄🔄🔄🔄🔄")
+
+        try:
+            con = sqlite3.connect(self.BD_REPLICA_DB)
+            registros_sync = []
+
+            # GPS
+            rows = con.execute(
+                "SELECT ID, TIPO_SENSOR, INTERSECCION, NIVEL_CONGESTION, VELOCIDAD_PROMEDIO, TIMESTAMP FROM GPS WHERE TIMESTAMP >= ?",
+                (timestamp_con_margen,)
+            ).fetchall()
+            n_gps = len(rows)
+            for r in rows:
+                registros_sync.append({
+                    "sync_tipo": "sensor",
+                    "evento": {
+                        "sensor_id": r[0].rsplit("_", 1)[0],
+                        "tipo_sensor": r[1],
+                        "interseccion": r[2],
+                        "nivel_congestion": r[3],
+                        "velocidad_promedio": r[4],
+                        "timestamp": r[5],
+                    },
+                })
+
+            # Camara
+            rows = con.execute(
+                "SELECT ID, TIPO_SENSOR, INTERSECCION, VOLUMEN, VELOCIDAD_PROMEDIO, COLA_HORIZONTAL, COLA_VERTICAL, TIMESTAMP FROM CAMARA WHERE TIMESTAMP >= ?",
+                (timestamp_con_margen,)
+            ).fetchall()
+            n_cam = len(rows)
+            for r in rows:
+                registros_sync.append({
+                    "sync_tipo": "sensor",
+                    "evento": {
+                        "sensor_id": r[0].rsplit("_", 1)[0],
+                        "tipo_sensor": r[1],
+                        "interseccion": r[2],
+                        "volumen": r[3],
+                        "velocidad_promedio": r[4],
+                        "cola_horizontal": r[5],
+                        "cola_vertical": r[6],
+                        "timestamp": r[7],
+                    },
+                })
+
+            # Espira
+            rows = con.execute(
+                "SELECT ID, TIPO_SENSOR, INTERSECCION, VEHICULOS_CONTADOS, INTERVALO_SEGUNDOS, TIMESTAMP_INICIO, TIMESTAMP_FIN FROM ESPIRA WHERE TIMESTAMP_FIN >= ?",
+                (timestamp_con_margen,)
+            ).fetchall()
+            n_esp = len(rows)
+            for r in rows:
+                registros_sync.append({
+                    "sync_tipo": "sensor",
+                    "evento": {
+                        "sensor_id": r[0].rsplit("_", 1)[0],
+                        "tipo_sensor": r[1],
+                        "interseccion": r[2],
+                        "vehiculos_contados": r[3],
+                        "intervalo_segundos": r[4],
+                        "timestamp_inicio": r[5],
+                        "timestamp_fin": r[6],
+                    },
+                })
+
+            # Decisiones
+            rows = con.execute(
+                "SELECT INTERSECCION, ESTADO_TRAFICO, ACCION, TIMESTAMP FROM DECISIONES WHERE TIMESTAMP >= ?",
+                (timestamp_con_margen,)
+            ).fetchall()
+            n_dec = len(rows)
+            for r in rows:
+                registros_sync.append({
+                    "sync_tipo": "decision",
+                    "interseccion": r[0],
+                    "estado_trafico": r[1],
+                    "accion": r[2],
+                    "timestamp": r[3],
+                })
+
+            con.close()
+
+            print(f"🔄🔄🔄🔄🔄 [SYNC] Registros a enviar: GPS={n_gps} CAM={n_cam} ESP={n_esp} DEC={n_dec} TOTAL={len(registros_sync)} 🔄🔄🔄🔄🔄")
+
+            if not registros_sync:
+                print("🔄🔄🔄🔄🔄 [SYNC] No hay datos pendientes de sincronizar 🔄🔄🔄🔄🔄")
+                with self.lock_pc3_estado:
+                    self.timestamp_caida_pc3 = None
+                    self.pc3_syncing = False
+                return
+
+            socket_sync = self.contexto.socket(zmq.PUSH)
+            socket_sync.setsockopt(zmq.LINGER, 30000)   # 30s para asegurar entrega completa
+            socket_sync.setsockopt(zmq.SNDHWM, 10000)   # buffer grande: evita bloqueos en el loop
+            socket_sync.connect(f"tcp://{self.BD_PRINCIPAL_IP}:{self.BD_PRINCIPAL_SYNC_PUERTO}")
+
+            time.sleep(1)
+
+            for registro in registros_sync:
+                socket_sync.send_string(json.dumps(registro))
+
+            print(f"🔄🔄🔄🔄🔄 [SYNC] {len(registros_sync)} mensajes enviados al buffer ZMQ. Cerrando socket... 🔄🔄🔄🔄🔄")
+            socket_sync.close()  # espera hasta 30s para que TCP entregue todo a PC3
+            print("✅✅✅✅✅ [SYNC] Socket cerrado. PC3 procesara los registros en background. ✅✅✅✅✅")
+
+            with self.lock_pc3_estado:
+                self.timestamp_caida_pc3 = None
+                self.pc3_syncing = False
+
+        except Exception as e:
+            print(f"❌❌❌❌❌ [SYNC] Error durante sincronizacion: {e} ❌❌❌❌❌")
+            with self.lock_pc3_estado:
+                self.pc3_syncing = False
+
     # CIERRE
-    
+
     def cerrar(self):
         if self.socket_sub_broker is not None:
             self.socket_sub_broker.close()
@@ -395,6 +625,7 @@ class ServicioAnalitica:
             self.imprimir_reglas()
             self.conectar()
             threading.Thread(target=self.escuchar_monitoreo, daemon=True).start()
+            threading.Thread(target=self.health_check_pc3, daemon=True).start()
             self.recibir_eventos()
         except KeyboardInterrupt:
             print("\n[ANALITICA] Servicio detenido por el usuario")
