@@ -1,6 +1,9 @@
 import json
+import os
 from datetime import datetime
 import zmq
+
+VD2_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pruebas", "vd2_fin.log")
 
 
 class ServicioControlSemaforos:
@@ -92,6 +95,16 @@ class ServicioControlSemaforos:
 
         respuesta = self.reenviar_a_pc1(payload_pc1)
         print(f"[CONTROL] Respuesta PC1: {respuesta}")
+
+        # Usa t1_pc1 capturado en PC1 (momento real del cambio de semáforo).
+        # Fallback a datetime.now() local solo si PC1 no envió el campo (compatibilidad).
+        ts_aplicacion = respuesta.get("t1_pc1") or datetime.now().isoformat(timespec="milliseconds")
+        print(f"[VD2-FIN] {ts_aplicacion} — cambio aplicado en PC1")
+        try:
+            with open(VD2_LOG, "a") as f:
+                f.write(f"[VD2-FIN] {ts_aplicacion}\n")
+        except Exception:
+            pass
 
     def recibir_comandos(self):
         while True:

@@ -1,0 +1,9 @@
+escenario,diseno,vd1_mediana_registros_2min,vd1_prom_registros_2min,vd1_std,vd2_mediana_ms,vd2_p90_ms,vd2_p95_ms,vd1_repeticiones,vd2_repeticiones
+A,original,52,52,0.0,2.0,2.0,427.15,5,30
+A,multihilo_2,52,52,0.0,2.0,2.0,434.85,5,30
+A,multihilo_4,52,52,0.0,2.0,3.0,432.0,5,30
+A,multihilo_8,52,52,0.0,2.0,3.0,411.1,5,30
+B,original,200,200,0.0,2.0,770.3,804.2,5,30
+B,multihilo_2,200,200,0.0,2.0,76.6,773.3,5,30
+B,multihilo_4,200,200,0.0,2.0,826.4,840.65,5,30
+B,multihilo_8,200,200,0.0,2.0,932.1,936.85,5,30

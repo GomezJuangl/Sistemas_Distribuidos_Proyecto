@@ -1,5 +1,6 @@
 import zmq
 import json
+from datetime import datetime
 
 # ─── AUTENTICACIÓN ────────────────────────────────────────────────────────────
 USUARIO_VALIDO    = "admin"
@@ -189,6 +190,8 @@ class Monitoreo_Consulta():
                 "eje": eje,
                 "duracion": duracion
             })
+            ts_envio = datetime.now().isoformat(timespec="milliseconds")
+            print(f"[VD2-INICIO] {ts_envio} — comando enviado a analítica")
             self.req_analitica.send_string(comando)
             respuesta = self.req_analitica.recv_string()
             print(respuesta)

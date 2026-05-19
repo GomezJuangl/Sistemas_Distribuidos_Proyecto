@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import datetime
 import zmq
 
 
@@ -118,12 +119,15 @@ class ReceptorControlSemaforos:
             }
 
         ok, mensaje = self.aplicar_accion(interseccion_obj, accion, duracion)
+        # t1 capturado en PC1 justo después del cambio efectivo del semáforo.
+        t1_pc1 = datetime.now().isoformat(timespec="milliseconds")
 
         return {
             "ok": ok,
             "interseccion": interseccion_id,
             "accion_aplicada": accion,
-            "mensaje": mensaje
+            "mensaje": mensaje,
+            "t1_pc1": t1_pc1
         }
 
     def _run(self):
