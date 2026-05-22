@@ -4,10 +4,17 @@ Mide VD1 (registros en BD réplica) y VD2 (latencia comando→semáforo).
 Uso:
     python3 medir_rendimiento.py --escenario A --diseno original
     python3 medir_rendimiento.py --escenario A --diseno multihilo_4
+    python3 medir_rendimiento.py --escenario A --diseno multihilo_4 --con-generador
+    python3 medir_rendimiento.py --escenario A --diseno multihilo_4 --con-generador --tasa-generador 2000
+    python3 medir_rendimiento.py --escenario A --diseno multihilo_4 --red congestionada
+
+--diseno acepta "original" o "multihilo_N" donde N es un entero >= 1.
+--con-generador lanza PC1/generador_carga.py como subprocess durante VD1 (solo localhost).
+--red etiqueta el entorno de red en el CSV (limpia | congestionada).
 
 Repeticiones:
     - VD2: 30 mediciones consecutivas (tarda ~1 min en total)
-    - VD1: 5 ventanas de 2 min consecutivas (tarda ~10 min en total)
+    - VD1: 3 ventanas de 2 min consecutivas (tarda ~6 min en total)
     El sistema debe estar levantado y estable antes de correr este script.
 
 Archivos generados:
@@ -19,18 +26,32 @@ import argparse
 import csv
 import json
 import os
+import re
 import sqlite3
+import subprocess
+import sys
 import time
 import zmq
 from datetime import datetime
 from statistics import mean, median, stdev
 
+
+def _tipo_diseno(valor: str) -> str:
+    """Tipo argparse: acepta 'original' o 'multihilo_N' con N entero >= 1."""
+    if valor in ("original", "multihilo"):
+        return valor
+    m = re.fullmatch(r"multihilo_(\d+)", valor)
+    if m and int(m.group(1)) >= 1:
+        return valor
+    raise argparse.ArgumentTypeError(
+        f"'{valor}' no es válido. Use 'original' o 'multihilo_N' con N entero >= 1."
+    )
+
+
 # ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 DB_REPLICA_PATH  = os.path.join(os.path.dirname(__file__), "..", "BaseDatosReplica", "bd_replica.db")
 VD2_LOG          = os.path.join(os.path.dirname(__file__), "vd2_fin.log")
 RESULTADOS_CSV   = os.path.join(os.path.dirname(__file__), "resultados.csv")
-
-DISENOS_VALIDOS = ["original", "multihilo", "multihilo_2", "multihilo_4", "multihilo_8"]
 
 # t0 se captura en PC3 (disparador_vd2.py) para incluir el hop PC3→PC2 en la latencia.
 # Cambiar PC3_IP a la IP real de PC3 al migrar a 3 máquinas físicas.
@@ -39,7 +60,7 @@ PC3_DISPARADOR_PUERTO = 6004
 
 VD2_REPETICIONES        = 30
 VD2_PAUSA_ENTRE_SEG     = 2    # pausa entre cada tiro de VD2
-VD1_REPETICIONES        = 5
+VD1_REPETICIONES        = 3
 VD1_VENTANA_SEG         = 120  # 2 minutos por ventana
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -183,7 +204,9 @@ def guardar_resumen(escenario: str, diseno: str, vd2_lista: list[float], vd1_lis
     vd2_mediana  = round(median(vd2_validos), 2) if vd2_validos else -1
     vd2_p90      = percentil(vd2_validos, 90) if vd2_validos else -1
     vd2_p95      = percentil(vd2_validos, 95) if vd2_validos else -1
-    vd1_validos  = [v for v in vd1_lista if v >= 0]
+    # Descartar ventanas VD1 con 0 registros (indican que analítica/generador
+    # dejó de funcionar durante esa ventana — dato inválido, no real).
+    vd1_validos  = [v for v in vd1_lista if v > 0]
     vd1_mediana  = round(median(vd1_validos), 1) if vd1_validos else -1
     vd1_prom     = round(mean(vd1_validos), 1) if vd1_validos else -1
     vd1_std      = round(stdev(vd1_validos), 2) if len(vd1_validos) > 1 else 0
@@ -206,7 +229,9 @@ def guardar_resumen(escenario: str, diseno: str, vd2_lista: list[float], vd1_lis
 def main():
     parser = argparse.ArgumentParser(description="Mide VD1 y VD2 del sistema GITU")
     parser.add_argument("--escenario", choices=["A", "B"], required=True)
-    parser.add_argument("--diseno",    choices=DISENOS_VALIDOS, required=True)
+    parser.add_argument("--diseno",    type=_tipo_diseno, required=True,
+                        metavar="DISENO",
+                        help="'original' o 'multihilo_N' con N entero >= 1")
     args = parser.parse_args()
 
     diseno = normalizar_diseno(args.diseno)
