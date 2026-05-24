@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+broker_audit/
+bd_replica.db
+bd_replica.db-journal
+bd_replica.db-wal
+bd_principal.db
+bd_principal.db-journal
+bd_principal.db-wal

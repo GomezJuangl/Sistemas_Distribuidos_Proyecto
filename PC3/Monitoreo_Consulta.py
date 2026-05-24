@@ -1,5 +1,8 @@
 import zmq
 import json
+from datetime import datetime
+
+PC2_IP = "10.43.99.102"
 
 # ─── AUTENTICACIÓN ────────────────────────────────────────────────────────────
 USUARIO_VALIDO    = "admin"
@@ -26,23 +29,99 @@ def login():
 
 class Monitoreo_Consulta():
     def __init__(self):
-        self.IP = ""
-        self.Puerto_BDP = 5101 
+        self.IP_BD_PRINCIPAL = "127.0.0.1"
+        self.Puerto_BDP = 5101
+
+        self.IP_BD_REPLICA = PC2_IP
+        self.Puerto_BDR = 5102
+
+        self.TIMEOUT_MS = 3000  # Timeout para detectar caida de BD principal
+
         self.context = zmq.Context()
-        self.req_socket = self.context.socket(zmq.REQ)
-        self.req_socket.connect(f"tcp://10.43.100.49:{self.Puerto_BDP}")
+
+        # Socket principal (BD en PC3)
+        self.req_socket = self._crear_socket_bd(self.IP_BD_PRINCIPAL, self.Puerto_BDP)
+
+        # Socket replica (BD en PC2) - se usa si la principal no responde
+        self.req_socket_replica = self._crear_socket_bd(self.IP_BD_REPLICA, self.Puerto_BDR)
+
+        self.usando_replica = False
 
         self.Puerto_Analitica = 6001
         self.req_analitica = self.context.socket(zmq.REQ)
-        self.req_analitica.connect(f"tcp://10.43.99.102:{self.Puerto_Analitica}")
+        self.req_analitica.connect(f"tcp://{PC2_IP}:{self.Puerto_Analitica}")
 
         self.usuario = None
+
+    def _crear_socket_bd(self, ip, puerto):
+        """Crea un socket REQ con timeout configurado."""
+        sock = self.context.socket(zmq.REQ)
+        sock.setsockopt(zmq.RCVTIMEO, self.TIMEOUT_MS)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.connect(f"tcp://{ip}:{puerto}")
+        return sock
+
+    def _reconectar_socket_principal(self):
+        """Cierra y recrea el socket principal (patron Lazy Pirate)."""
+        self.req_socket.close()
+        self.req_socket = self._crear_socket_bd(self.IP_BD_PRINCIPAL, self.Puerto_BDP)
+
+    def _reconectar_socket_replica(self):
+        """Cierra y recrea el socket replica."""
+        self.req_socket_replica.close()
+        self.req_socket_replica = self._crear_socket_bd(self.IP_BD_REPLICA, self.Puerto_BDR)
+
+    def enviar_consulta(self, consulta):
+        """Envia consulta a BD principal. Si falla, usa la replica."""
+
+        # Si ya estamos en modo replica, intentar primero la principal por si ya volvio
+        if self.usando_replica:
+            try:
+                self.req_socket.send_string(consulta)
+                respuesta = self.req_socket.recv_string()
+                # Funciono, volver a modo principal
+                self.usando_replica = False
+                print("[MONITOREO] BD Principal recuperada. Volviendo a modo normal.")
+                return respuesta
+            except zmq.Again:
+                self._reconectar_socket_principal()
+            except Exception:
+                self._reconectar_socket_principal()
+
+        if not self.usando_replica:
+            # Intentar con BD principal
+            try:
+                self.req_socket.send_string(consulta)
+                respuesta = self.req_socket.recv_string()
+                return respuesta
+            except zmq.Again:
+                print("[MONITOREO] BD Principal no responde. Cambiando a BD Replica...")
+                self._reconectar_socket_principal()
+                self.usando_replica = True
+            except Exception as e:
+                print(f"[MONITOREO] Error con BD Principal: {e}. Cambiando a BD Replica...")
+                self._reconectar_socket_principal()
+                self.usando_replica = True
+
+        # Usar replica
+        try:
+            self.req_socket_replica.send_string(consulta)
+            respuesta = self.req_socket_replica.recv_string()
+            return respuesta
+        except zmq.Again:
+            self._reconectar_socket_replica()
+            return "Error: Ni la BD Principal ni la BD Replica respondieron."
+        except Exception as e:
+            self._reconectar_socket_replica()
+            return f"Error con BD Replica: {e}"
 
 
 
     def ConsultaBD(self):
-        print("\n" + "=" * 50)
-        print("  SERVICIO DE MONITOREO Y CONSULTA")
+        # Mostrar si estamos usando la replica
+        modo = "(REPLICA)" if self.usando_replica else "(PRINCIPAL)"
+        print(f"\n{'=' * 50}")
+        print(f"  SERVICIO DE MONITOREO Y CONSULTA {modo}")
         print("=" * 50)
         print("1. Consultar estado actual de una intersección")
         print("2. Consultar histórico entre dos fechas")
@@ -62,8 +141,7 @@ class Monitoreo_Consulta():
                 "tipo": "estado_actual",
                 "interseccion": interseccion
             })
-            self.req_socket.send_string(consulta)
-            respuesta = self.req_socket.recv_string()
+            respuesta = self.enviar_consulta(consulta)
             print(respuesta)
 
         elif opcion == "2":
@@ -78,8 +156,7 @@ class Monitoreo_Consulta():
                 "inicio": inicio,
                 "fin": fin
             })
-            self.req_socket.send_string(consulta)
-            respuesta = self.req_socket.recv_string()
+            respuesta = self.enviar_consulta(consulta)
             print(respuesta)
 
         elif opcion == "3":
@@ -91,8 +168,7 @@ class Monitoreo_Consulta():
                 "tipo": "decisiones_interseccion",
                 "interseccion": interseccion
             })
-            self.req_socket.send_string(consulta)
-            respuesta = self.req_socket.recv_string()
+            respuesta = self.enviar_consulta(consulta)
             print(respuesta)
 
         elif opcion == "4":
@@ -116,6 +192,8 @@ class Monitoreo_Consulta():
                 "eje": eje,
                 "duracion": duracion
             })
+            ts_envio = datetime.now().isoformat(timespec="milliseconds")
+            print(f"[VD2-INICIO] {ts_envio} — comando enviado a analítica")
             self.req_analitica.send_string(comando)
             respuesta = self.req_analitica.recv_string()
             print(respuesta)

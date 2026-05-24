@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import datetime
 import zmq
 
 
@@ -82,13 +83,14 @@ class ReceptorControlSemaforos:
             return False, "Accion no soportada"
 
         estado = interseccion_obj.semaforo.obtener_estado()
+        sf = estado['semaforo_fila']
+        sc = estado['semaforo_columna']
 
         print(
             f"[PC1-RECEPTOR] Estado semaforo -> "
             f"Interseccion={interseccion_id} | "
-            f"Fase={estado['fase_actual']} | "
-            f"H={estado['luz_horizontal']} | "
-            f"V={estado['luz_vertical']} | "
+            f"{sf['semaforo_id']}={sf['estado']} | "
+            f"{sc['semaforo_id']}={sc['estado']} | "
             f"Restan={estado['tiempo_restante']}s | "
             f"Prioridad={estado['modo_prioridad']} | "
             f"Direccion={estado['direccion_prioritaria']}"
@@ -117,12 +119,15 @@ class ReceptorControlSemaforos:
             }
 
         ok, mensaje = self.aplicar_accion(interseccion_obj, accion, duracion)
+        # t1 capturado en PC1 justo después del cambio efectivo del semáforo.
+        t1_pc1 = datetime.now().isoformat(timespec="milliseconds")
 
         return {
             "ok": ok,
             "interseccion": interseccion_id,
             "accion_aplicada": accion,
-            "mensaje": mensaje
+            "mensaje": mensaje,
+            "t1_pc1": t1_pc1
         }
 
     def _run(self):

@@ -1,6 +1,11 @@
 import json
+import os
 from datetime import datetime
 import zmq
+
+PC1_IP = "10.43.99.110"
+
+VD2_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pruebas", "vd2_fin.log")
 
 
 class ServicioControlSemaforos:
@@ -11,7 +16,7 @@ class ServicioControlSemaforos:
         self.PULL_IP = "127.0.0.1"
         self.PULL_PUERTO = 6002
 
-        self.PC1_IP = "10.43.99.110"
+        self.PC1_IP = PC1_IP
         self.PC1_PUERTO = 6003
 
         # ==========================================
@@ -25,13 +30,13 @@ class ServicioControlSemaforos:
     def conectar_servicios(self):
         # Recibe desde analitica
         self.socket_pull_analitica = self.contexto.socket(zmq.PULL)
-        self.socket_pull_analitica.bind(f"tcp://*:{self.PULL_PUERTO}")
+        self.socket_pull_analitica.bind(f"tcp://{self.PULL_IP}:{self.PULL_PUERTO}")
 
         # Envia hacia PC1
         self.socket_req_pc1 = self.contexto.socket(zmq.REQ)
         self.socket_req_pc1.connect(f"tcp://{self.PC1_IP}:{self.PC1_PUERTO}")
 
-        print(f"[CONTROL] Escuchando de analitica en tcp://*:{self.PULL_PUERTO}")
+        print(f"[CONTROL] Escuchando de analitica en tcp://{self.PULL_IP}:{self.PULL_PUERTO}")
         print(f"[CONTROL] Conectado a PC1 en tcp://{self.PC1_IP}:{self.PC1_PUERTO}")
 
     def parsear_comando(self, mensaje):
@@ -92,6 +97,16 @@ class ServicioControlSemaforos:
 
         respuesta = self.reenviar_a_pc1(payload_pc1)
         print(f"[CONTROL] Respuesta PC1: {respuesta}")
+
+        # Usa t1_pc1 capturado en PC1 (momento real del cambio de semáforo).
+        # Fallback a datetime.now() local solo si PC1 no envió el campo (compatibilidad).
+        ts_aplicacion = respuesta.get("t1_pc1") or datetime.now().isoformat(timespec="milliseconds")
+        print(f"[VD2-FIN] {ts_aplicacion} — cambio aplicado en PC1")
+        try:
+            with open(VD2_LOG, "a") as f:
+                f.write(f"[VD2-FIN] {ts_aplicacion}\n")
+        except Exception:
+            pass
 
     def recibir_comandos(self):
         while True:
