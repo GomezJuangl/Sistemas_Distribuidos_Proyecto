@@ -15,7 +15,7 @@ Sistema distribuido para monitoreo, análisis y control de tráfico urbano usand
 En las 3 máquinas:
 ```bash
 sudo apt install python3 python3-pip iperf3 -y
-pip3 install pyzmq pandas matplotlib
+pip3 install pyzmq pandas matplotlib psutil
 ```
 
 ## Puertos ZMQ
@@ -30,6 +30,7 @@ pip3 install pyzmq pandas matplotlib
 | 6002 | PUSH/PULL | Analítica → Control Semáforos |
 | 6003 | REQ/REP | Control Semáforos → Receptor PC1 |
 | 6004 | REQ/REP | Medir Rendimiento → Disparador VD2 |
+| 6010 | REQ/REP | Prueba Estrés (PC2) → Generador Controlable (PC1) |
 | 7001 | PUSH/PULL | Analítica → BD Principal |
 | 7002 | PUSH/PULL | Analítica → BD Réplica |
 | 7003 | REQ/REP | Analítica health-check → BD Principal |
@@ -99,8 +100,8 @@ Python tiene el GIL (Global Interpreter Lock) que solo permite que un hilo ejecu
 
 | PC | Scripts |
 |----|---------|
-| PC1 | `pc1_servicios.sh`, `pc1_solo_vd2.sh`, `pc1_iperf_servers.sh` |
-| PC2 | `pc2_caso.sh`, `pc2_solo_vd2.sh`, `pc2_iperf_ronda.sh` |
+| PC1 | `pc1_servicios.sh`, `pc1_solo_vd2.sh`, `pc1_iperf_servers.sh`, `pc1_estres.sh` |
+| PC2 | `pc2_caso.sh`, `pc2_solo_vd2.sh`, `pc2_iperf_ronda.sh`, `pc2_estres.sh` |
 | PC3 | `pc3_servicios.sh`, `pc3_iperf_servers.sh` |
 
 Dar permisos antes de usar: `chmod 777 *.sh`
@@ -152,12 +153,36 @@ PC3:  ./pc3_iperf_servers.sh stop
 
 Se usan 16 procesos iperf3 TCP simultáneos (8 hacia PC1 + 8 hacia PC3) para saturar la red de 10Gbps.
 
+#### Ronda 3 — Prueba de estrés (carga máxima del sistema)
+
+Se determina la carga máxima que el sistema puede procesar sin perder mensajes. Se fija el broker en 8 hilos (punto óptimo encontrado en la Ronda 1) y se incrementa progresivamente la tasa de inyección del generador de carga (50, 100, 200, 500, 1000, 2000, 5000 msg/s). Para cada tasa se mide durante 60 segundos el throughput real (registros almacenados en BD), el uso de CPU de analítica y la tasa de pérdida de mensajes.
+
+El generador controlable (`PC1/generador_carga_estres.py`) se queda escuchando en el puerto 6010 y recibe comandos remotos desde PC2 para iniciar, parar y cambiar la tasa de inyección entre rondas sin intervención manual.
+
+Ejecutar en orden:
+```
+PC3:  ./pc3_servicios.sh
+PC1:  ./pc1_estres.sh
+PC2:  ./pc2_estres.sh
+```
+
+Cuando PC2 termina y muestra "PRUEBA DE ESTRÉS COMPLETADA", hacer Ctrl+C en PC1 y PC3.
+
+Para ejecutar con tasas o ventana personalizadas:
+```
+PC2:  ./pc2_estres.sh "50,100,500,1000" 90
+```
+
+Tiempo estimado con las tasas por defecto (7 tasas, ventana 60s): ~9 minutos.
+
 #### Generar gráficas
 
 ```bash
 cd ~/Downloads/PC2/Pruebas
 python3 generar_graficas.py
 ```
+
+La gráfica de la prueba de estrés se genera automáticamente al finalizar `pc2_estres.sh`
 
 Las gráficas se guardan en `PC2/Pruebas/graficas/`.
 
@@ -168,9 +193,9 @@ Las gráficas se guardan en `PC2/Pruebas/graficas/`.
 | `curva_inflexion_vd1.png` | Curva de inflexión: solicitudes almacenadas en BD vs número de hilos del broker |
 | `vd2_red_A.png` | Tiempo de respuesta del comando de prioridad sin iperf3 vs con iperf3 (Escenario A) |
 | `vd2_red_B.png` | Tiempo de respuesta del comando de prioridad sin iperf3 vs con iperf3 (Escenario B) |
-| `distribucion_vd2_boxplot.png` | Box plot de las 30 mediciones de latencia por caso |
 | `solicitudes_por_escenario.png` | Barras de solicitudes almacenadas por escenario y diseño |
 | `latencia_por_escenario.png` | Barras de latencia por escenario y diseño |
+| `estres_carga_maxima.png` | Carga máxima del sistema: throughput real y tasa de pérdida vs tasa de inyección |
 
 ## Configuración de la ciudad
 
